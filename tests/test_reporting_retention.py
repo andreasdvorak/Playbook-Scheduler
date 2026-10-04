@@ -1,3 +1,5 @@
+"""Tests for report generation, output truncation, and run retention."""
+
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from playbook_scheduler.retention import remove_expired_runs
 
 
 def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
+    """Escape untrusted output and render both populated and empty reports."""
     runs = tmp_path / "runs"
     reports = tmp_path / "reports"
     runs.mkdir()
@@ -76,6 +79,7 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
 
 
 def test_retention_removes_only_runs_older_than_cutoff(tmp_path: Path) -> None:
+    """Delete expired run records while preserving recent ones."""
     runs = tmp_path / "runs"
     runs.mkdir()
     expired = runs / "expired.json"
@@ -94,6 +98,7 @@ def test_retention_removes_only_runs_older_than_cutoff(tmp_path: Path) -> None:
 
 
 def write_run(runs: Path, name: str, **fields) -> None:
+    """Write a run record with defaults that individual tests can override."""
     runs.mkdir(exist_ok=True)
     record = {
         "job": "ping",
@@ -111,6 +116,7 @@ def write_run(runs: Path, name: str, **fields) -> None:
 
 
 def test_tail_output_keeps_last_lines_and_cuts_long_lines() -> None:
+    """Keep only requested trailing lines and truncate oversized lines."""
     text = "\n".join(f"line {number}" for number in range(1, 11))
 
     assert tail_output(text, 3) == ("line 8\nline 9\nline 10", 7)
@@ -121,6 +127,7 @@ def test_tail_output_keeps_last_lines_and_cuts_long_lines() -> None:
 
 
 def test_report_shows_only_last_output_lines(tmp_path: Path) -> None:
+    """Display only the configured tail of captured command output."""
     stdout = "\n".join(f"output line {number}" for number in range(1, 301))
     write_run(tmp_path / "runs", "20260101_ping.json", stdout=stdout, stderr="warning")
 
@@ -139,6 +146,7 @@ def test_report_shows_only_last_output_lines(tmp_path: Path) -> None:
 
 
 def test_report_shows_skipped_runs(tmp_path: Path) -> None:
+    """Render skipped runs with the skipped status and explanatory message."""
     write_run(tmp_path / "runs", "a.json")
     write_run(
         tmp_path / "runs",

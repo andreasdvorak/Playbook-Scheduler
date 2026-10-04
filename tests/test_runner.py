@@ -1,10 +1,12 @@
+"""Tests for Ansible process execution and run-record persistence."""
+
 import json
 import os
 import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -13,6 +15,7 @@ from playbook_scheduler.runner import STOP_GRACE_SECONDS, run_job
 
 
 def make_job(tmp_path: Path) -> Job:
+    """Build a representative job for runner tests."""
     return Job(
         name="patch_linux",
         cron="0 2 * * *",
@@ -30,10 +33,12 @@ def fake_popen(*communicate, returncode=0, on_start=None):
     Each item of ``communicate`` is one result of ``process.communicate()``:
     an ``(stdout, stderr)`` tuple or an exception to raise.
     """
-    process = Mock(returncode=returncode)
+    process = MagicMock(returncode=returncode)
+    process.__enter__.return_value = process
     process.communicate.side_effect = list(communicate)
 
-    def start(*args, **kwargs):
+    def start(*_args, **kwargs):
+        """Return the configured process mock for a Popen call."""
         if on_start is not None:
             on_start(kwargs)
         return process
@@ -42,7 +47,10 @@ def fake_popen(*communicate, returncode=0, on_start=None):
 
 
 def test_run_job_persists_success_result(tmp_path: Path) -> None:
+    """Persist successful output and metrics with the expected command."""
+
     def write_metrics(kwargs):
+        """Write a valid metrics payload to the callback's configured path."""
         Path(kwargs["env"]["PLAYBOOK_SCHEDULER_METRICS_FILE"]).write_text(
             json.dumps({"hosts_total": 1, "hosts_changed": 1}),
             encoding="utf-8",
@@ -72,6 +80,7 @@ def test_run_job_persists_success_result(tmp_path: Path) -> None:
 
 
 def test_nonzero_exit_is_recorded_as_failed(tmp_path: Path) -> None:
+    """Record a non-zero Ansible exit status as a failed run."""
     popen, _ = fake_popen(("", "play failed"), returncode=2)
     with patch("playbook_scheduler.runner.subprocess.Popen", popen):
         result = run_job(make_job(tmp_path), tmp_path / "runs")
@@ -81,6 +90,7 @@ def test_nonzero_exit_is_recorded_as_failed(tmp_path: Path) -> None:
 
 
 def test_timeout_terminates_ansible_gracefully(tmp_path: Path) -> None:
+    """Terminate a timed-out process and record its captured output."""
     popen, process = fake_popen(
         subprocess.TimeoutExpired("ansible-playbook", 15), ("started", "")
     )
@@ -90,12 +100,14 @@ def test_timeout_terminates_ansible_gracefully(tmp_path: Path) -> None:
     assert result["status"] == "failed"
     assert result["stdout"] == "started"
     assert result["return_code"] is None
-    assert "Timed out" in result["error"]
+    assert isinstance(result["error"], str)
+    assert "Timed out" in str(result["error"])
     process.terminate.assert_called_once()
     process.kill.assert_not_called()
 
 
 def test_timeout_kills_ansible_that_ignores_terminate(tmp_path: Path) -> None:
+    """Kill the process when it remains alive after the graceful timeout."""
     popen, process = fake_popen(
         subprocess.TimeoutExpired("ansible-playbook", 15),
         subprocess.TimeoutExpired("ansible-playbook", STOP_GRACE_SECONDS),
@@ -104,12 +116,14 @@ def test_timeout_kills_ansible_that_ignores_terminate(tmp_path: Path) -> None:
     with patch("playbook_scheduler.runner.subprocess.Popen", popen):
         result = run_job(make_job(tmp_path), tmp_path / "runs")
 
-    assert "Timed out" in result["error"]
+    assert isinstance(result["error"], str)
+    assert "Timed out" in str(result["error"])
     process.terminate.assert_called_once()
     process.kill.assert_called_once()
 
 
 def test_interrupt_stops_ansible_and_is_raised(tmp_path: Path) -> None:
+    """Stop Ansible when the caller is interrupted and re-raise the interrupt."""
     popen, process = fake_popen(KeyboardInterrupt(), ("", ""))
     with (
         patch("playbook_scheduler.runner.subprocess.Popen", popen),
@@ -121,16 +135,19 @@ def test_interrupt_stops_ansible_and_is_raised(tmp_path: Path) -> None:
 
 
 def test_start_error_is_recorded(tmp_path: Path) -> None:
+    """Record an operating-system error when Ansible cannot be started."""
     popen = Mock(side_effect=FileNotFoundError("ansible-playbook"))
     with patch("playbook_scheduler.runner.subprocess.Popen", popen):
         result = run_job(make_job(tmp_path), tmp_path / "runs")
 
     assert result["status"] == "failed"
-    assert "Could not start ansible-playbook" in result["error"]
+    assert isinstance(result["error"], str)
+    assert "Could not start ansible-playbook" in str(result["error"])
 
 
 @pytest.mark.skipif(os.name == "nt", reason="uses a POSIX shell script")
 def test_timeout_stops_real_process(tmp_path: Path) -> None:
+    """Stop a real long-running process promptly after its job timeout."""
     virtualenv = tmp_path / ".venv"
     executable = virtualenv / "bin" / "ansible-playbook"
     executable.parent.mkdir(parents=True)
@@ -142,11 +159,12 @@ def test_timeout_stops_real_process(tmp_path: Path) -> None:
     result = run_job(job, tmp_path / "runs")
 
     assert time.monotonic() - started < 10
-    assert "Timed out after 1 seconds." in result["error"]
+    assert result["error"] == "Timed out after 1 seconds."
     assert result["stdout"] == "started\n"
 
 
 def test_run_job_uses_configured_virtualenv(tmp_path: Path) -> None:
+    """Run the virtualenv executable with its paths in the child environment."""
     virtualenv = tmp_path / "project" / ".venv"
     executable = virtualenv / "bin" / "ansible-playbook"
     executable.parent.mkdir(parents=True)

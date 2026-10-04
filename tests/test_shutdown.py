@@ -1,3 +1,5 @@
+"""Tests for stopping active Ansible processes during scheduler shutdown."""
+
 import os
 import signal
 import threading
@@ -16,9 +18,10 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="uses POSIX shell script
 
 
 @pytest.fixture(autouse=True)
-def reset_stop_request():
+def reset_stop_request():  # pylint: disable=protected-access
+    """Clear the process stop flag after every shutdown test."""
     yield
-    runner._stop_requested.clear()
+    runner._stop_requested.clear()  # pylint: disable=protected-access
 
 
 def make_job(tmp_path: Path, script: str) -> Job:
@@ -40,7 +43,9 @@ def make_job(tmp_path: Path, script: str) -> Job:
     )
 
 
-def start_in_thread(job: Job, runs_directory: Path) -> tuple[threading.Thread, dict]:
+def start_in_thread(
+    job: Job, runs_directory: Path
+) -> tuple[threading.Thread, dict]:  # pylint: disable=protected-access
     """Run ``job`` in a thread and wait until its process has started."""
     results: dict = {}
     thread = threading.Thread(
@@ -48,13 +53,17 @@ def start_in_thread(job: Job, runs_directory: Path) -> tuple[threading.Thread, d
     )
     thread.start()
     deadline = time.monotonic() + 10
-    while not runner._running_processes and time.monotonic() < deadline:
+    while (
+        not runner._running_processes  # pylint: disable=protected-access
+        and time.monotonic() < deadline
+    ):
         time.sleep(0.05)
     time.sleep(0.2)  # Let the script print its first line.
     return thread, results
 
 
 def test_stop_running_jobs_records_interrupted_run(tmp_path: Path) -> None:
+    """Record an active run as interrupted after requesting a graceful stop."""
     job = make_job(tmp_path, "echo started\nexec sleep 30")
     thread, result = start_in_thread(job, tmp_path / "runs")
 
@@ -70,6 +79,7 @@ def test_stop_running_jobs_records_interrupted_run(tmp_path: Path) -> None:
 
 
 def test_job_started_after_stop_request_is_interrupted(tmp_path: Path) -> None:
+    """Interrupt a newly launched process when shutdown was already requested."""
     job = make_job(tmp_path, "exec sleep 30")
     stop_running_jobs()
 
@@ -81,6 +91,7 @@ def test_job_started_after_stop_request_is_interrupted(tmp_path: Path) -> None:
 
 
 def test_forced_stop_kills_process_that_ignores_terminate(tmp_path: Path) -> None:
+    """Force-kill a process that ignores the initial termination signal."""
     # An ignored signal stays ignored across exec, so sleep ignores SIGTERM.
     job = make_job(tmp_path, "trap '' TERM\nexec sleep 30")
     thread, result = start_in_thread(job, tmp_path / "runs")
@@ -98,6 +109,7 @@ def test_forced_stop_kills_process_that_ignores_terminate(tmp_path: Path) -> Non
 
 
 def test_signal_handler_stops_scheduler_then_forces(monkeypatch, caplog) -> None:
+    """Gracefully stop on the first signal and force-stop on the second."""
     calls: list[bool] = []
     monkeypatch.setattr(
         scheduler, "stop_running_jobs", lambda force=False: calls.append(force)

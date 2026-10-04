@@ -22,7 +22,8 @@ license = "Apache-2.0"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8",
+    "pylint>=4.1.2",
+    "pytest>=9.1.1",
     "ruff==0.16.10",
     "yamllint==1.38.0",
 ]

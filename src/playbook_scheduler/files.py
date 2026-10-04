@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import IO
 
 if os.name == "nt":
-    import msvcrt
+    import msvcrt  # pylint: disable=import-error
 else:
     import fcntl
 
