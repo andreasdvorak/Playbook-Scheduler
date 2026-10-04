@@ -216,7 +216,7 @@ class ConfigWatcher:
         return True
 
 
-class StopSignalHandler:
+class StopSignalHandler:  # pylint: disable=too-few-public-methods
     """Shut down the scheduler and running jobs on SIGTERM or SIGINT."""
 
     def __init__(self, scheduler: BaseScheduler) -> None:

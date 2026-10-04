@@ -17,7 +17,7 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
-class Job:
+class Job:  # pylint: disable=too-many-instance-attributes
     """A configured playbook run with its schedule and execution settings.
 
     Attributes:
@@ -75,7 +75,7 @@ def find_ansible_playbook(job: Job) -> Path | None:
 
 
 @dataclass(frozen=True)
-class AppConfig:
+class AppConfig:  # pylint: disable=too-many-instance-attributes
     """The complete, validated application configuration.
 
     Attributes:
@@ -195,6 +195,222 @@ def _optional_path(
     return _resolve_path(value.strip(), base)
 
 
+def _positive_integer(value: object, error_message: str) -> int:
+    """Return a positive integer, rejecting booleans as well as other types."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ConfigError(error_message)
+    return value
+
+
+def _timezone(data: dict[str, object]) -> str:
+    """Return the validated time zone configured for cron schedules."""
+    value = data.get("timezone", "UTC")
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("timezone must be a non-empty IANA time zone name.")
+    timezone = value.strip()
+    try:
+        ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as error:
+        raise ConfigError(f"Unknown time zone: {timezone}.") from error
+    return timezone
+
+
+def _job_name(
+    job_data: dict[str, object], context: str, names: set[str]
+) -> str:
+    """Read, validate, and register a unique job name."""
+    name = _required_string(job_data, "name", context)
+    if not name[0].isalnum() or any(
+        not (character.isalnum() or character in "._-") for character in name
+    ):
+        raise ConfigError(
+            f"{context}.name may contain only letters, numbers, dots, "
+            "underscores, and hyphens, and must start with a letter or number."
+        )
+    if name in names:
+        raise ConfigError(f"Duplicate job name: {name}.")
+    names.add(name)
+    return name
+
+
+def _cron_expression(job_data: dict[str, object], context: str, timezone: str) -> str:
+    """Return the validated cron expression for a job."""
+    cron = _required_string(job_data, "cron", context)
+    try:
+        CronTrigger.from_crontab(cron, timezone=timezone)
+    except ValueError as error:
+        raise ConfigError(f"{context}.cron is invalid: {error}") from error
+    return cron
+
+
+def _working_directory(
+    job_data: dict[str, object], context: str, base_directory: Path
+) -> Path:
+    """Resolve and validate the job working directory."""
+    value = job_data.get("working_directory", ".")
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{context}.working_directory must be a path.")
+    working_directory = _resolve_path(value.strip(), base_directory)
+    if not working_directory.is_dir():
+        raise ConfigError(
+            f"{context}.working_directory does not exist or is not a directory: "
+            f"{working_directory}"
+        )
+    return working_directory
+
+
+def _ansible_venv(
+    job_data: dict[str, object], context: str, working_directory: Path
+) -> Path | None:
+    """Resolve and validate an optional Ansible virtual environment."""
+    value = job_data.get("ansible_venv")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{context}.ansible_venv must be a path.")
+    ansible_venv = _resolve_path(value.strip(), working_directory)
+    if not ansible_venv.is_dir():
+        raise ConfigError(
+            f"{context}.ansible_venv does not exist or is not a directory: "
+            f"{ansible_venv}"
+        )
+    return ansible_venv
+
+
+def _job_files(
+    job_data: dict[str, object], context: str, working_directory: Path
+) -> tuple[Path, Path]:
+    """Resolve and validate the playbook and inventory paths."""
+    playbook = _resolve_path(
+        _required_string(job_data, "playbook", context), working_directory
+    )
+    inventory = _resolve_path(
+        _required_string(job_data, "inventory", context), working_directory
+    )
+    if not playbook.is_file():
+        raise ConfigError(f"{context}.playbook is not a file: {playbook}")
+    if not inventory.exists():
+        raise ConfigError(f"{context}.inventory does not exist: {inventory}")
+    return playbook, inventory
+
+
+def _job_options(
+    job_data: dict[str, object], context: str
+) -> tuple[int, tuple[str, ...]]:
+    """Validate and return a job's timeout and extra arguments."""
+    timeout_seconds = _positive_integer(
+        job_data.get("timeout_seconds", 3600),
+        f"{context}.timeout_seconds must be a positive integer.",
+    )
+    extra_args = job_data.get("extra_args", [])
+    if not isinstance(extra_args, list) or not all(
+        isinstance(argument, str) and argument for argument in extra_args
+    ):
+        raise ConfigError(f"{context}.extra_args must be a list of non-empty strings.")
+    return timeout_seconds, tuple(extra_args)
+
+
+def _make_job(
+    job_data: dict[str, object],
+    context: str,
+    name: str,
+    cron: str,
+    base_directory: Path,
+) -> Job:
+    """Construct a job after its name and cron expression have been validated."""
+    working_directory = _working_directory(job_data, context, base_directory)
+    ansible_venv = _ansible_venv(job_data, context, working_directory)
+    playbook, inventory = _job_files(job_data, context, working_directory)
+    timeout_seconds, extra_args = _job_options(job_data, context)
+    job = Job(
+        name=name,
+        cron=cron,
+        playbook=playbook,
+        inventory=inventory,
+        working_directory=working_directory,
+        timeout_seconds=timeout_seconds,
+        extra_args=extra_args,
+        ansible_venv=ansible_venv,
+    )
+    executable = job.ansible_playbook_executable
+    if executable is not None and not executable.is_file():
+        raise ConfigError(
+            f"{context}.ansible_venv does not contain ansible-playbook: {executable}"
+        )
+    return job
+
+
+def _parse_job(
+    raw_job: object,
+    index: int,
+    timezone: str,
+    base_directory: Path,
+    names: set[str],
+) -> Job:
+    """Validate and construct one configured job."""
+    context = f"jobs[{index}]"
+    job_data = _mapping(raw_job, context)
+    _allowed_keys(
+        job_data,
+        {
+            "name",
+            "cron",
+            "playbook",
+            "inventory",
+            "working_directory",
+            "timeout_seconds",
+            "extra_args",
+            "ansible_venv",
+        },
+        context,
+    )
+    name = _job_name(job_data, context, names)
+    cron = _cron_expression(job_data, context, timezone)
+    return _make_job(job_data, context, name, cron, base_directory)
+
+
+def _jobs(data: dict[str, object], timezone: str, base_directory: Path) -> tuple[Job, ...]:
+    """Validate and parse all configured jobs."""
+    raw_jobs = data.get("jobs")
+    if not isinstance(raw_jobs, list) or not raw_jobs:
+        raise ConfigError("jobs must be a non-empty YAML list.")
+    names: set[str] = set()
+    return tuple(
+        _parse_job(raw_job, index, timezone, base_directory, names)
+        for index, raw_job in enumerate(raw_jobs)
+    )
+
+
+def _build_config(path: Path, data: dict[str, object]) -> AppConfig:
+    """Build the validated application configuration from parsed YAML data."""
+    timezone = _timezone(data)
+    retention_days = _positive_integer(
+        data.get("retention_days", 30),
+        "retention_days must be a positive integer.",
+    )
+    max_parallel_jobs = _positive_integer(
+        data.get("max_parallel_jobs", 10),
+        "max_parallel_jobs must be a positive integer.",
+    )
+    report_output_lines = _positive_integer(
+        data.get("report_output_lines", 200),
+        "report_output_lines must be a positive integer.",
+    )
+    base_directory = path.parent
+    return AppConfig(
+        config_path=path,
+        timezone=timezone,
+        runs_directory=_optional_path(data, "runs_directory", "runs", base_directory),
+        reports_directory=_optional_path(
+            data, "reports_directory", "reports", base_directory
+        ),
+        retention_days=retention_days,
+        jobs=_jobs(data, timezone, base_directory),
+        max_parallel_jobs=max_parallel_jobs,
+        report_output_lines=report_output_lines,
+    )
+
+
 def load_config(config_path: Path | str) -> AppConfig:
     """Load, validate, and resolve the configuration file.
 
@@ -203,7 +419,7 @@ def load_config(config_path: Path | str) -> AppConfig:
     virtual environment paths from the job's working directory.
 
     Args:
-        config_path: Path of the YAML configuration file.
+        config_path: Path of the configuration file.
 
     Returns:
         The validated configuration with absolute paths.
@@ -234,147 +450,4 @@ def load_config(config_path: Path | str) -> AppConfig:
         },
         "Configuration",
     )
-
-    timezone = data.get("timezone", "UTC")
-    if not isinstance(timezone, str) or not timezone.strip():
-        raise ConfigError("timezone must be a non-empty IANA time zone name.")
-    timezone = timezone.strip()
-    try:
-        ZoneInfo(timezone)
-    except ZoneInfoNotFoundError as error:
-        raise ConfigError(f"Unknown time zone: {timezone}.") from error
-
-    retention_days = data.get("retention_days", 30)
-    if type(retention_days) is not int or retention_days < 1:
-        raise ConfigError("retention_days must be a positive integer.")
-
-    max_parallel_jobs = data.get("max_parallel_jobs", 10)
-    if type(max_parallel_jobs) is not int or max_parallel_jobs < 1:
-        raise ConfigError("max_parallel_jobs must be a positive integer.")
-
-    report_output_lines = data.get("report_output_lines", 200)
-    if type(report_output_lines) is not int or report_output_lines < 1:
-        raise ConfigError("report_output_lines must be a positive integer.")
-
-    base_directory = path.parent
-    runs_directory = _optional_path(data, "runs_directory", "runs", base_directory)
-    reports_directory = _optional_path(
-        data, "reports_directory", "reports", base_directory
-    )
-
-    raw_jobs = data.get("jobs")
-    if not isinstance(raw_jobs, list) or not raw_jobs:
-        raise ConfigError("jobs must be a non-empty YAML list.")
-
-    jobs: list[Job] = []
-    names: set[str] = set()
-    for index, raw_job in enumerate(raw_jobs):
-        context = f"jobs[{index}]"
-        job_data = _mapping(raw_job, context)
-        _allowed_keys(
-            job_data,
-            {
-                "name",
-                "cron",
-                "playbook",
-                "inventory",
-                "working_directory",
-                "timeout_seconds",
-                "extra_args",
-                "ansible_venv",
-            },
-            context,
-        )
-
-        name = _required_string(job_data, "name", context)
-        if not name[0].isalnum() or any(
-            not (character.isalnum() or character in "._-") for character in name
-        ):
-            raise ConfigError(
-                f"{context}.name may contain only letters, numbers, dots, "
-                "underscores, and hyphens, and must start with a letter or number."
-            )
-        if name in names:
-            raise ConfigError(f"Duplicate job name: {name}.")
-        names.add(name)
-
-        cron = _required_string(job_data, "cron", context)
-        try:
-            CronTrigger.from_crontab(cron, timezone=timezone)
-        except ValueError as error:
-            raise ConfigError(f"{context}.cron is invalid: {error}") from error
-
-        working_directory_value = job_data.get("working_directory", ".")
-        if not isinstance(working_directory_value, str) or not working_directory_value.strip():
-            raise ConfigError(f"{context}.working_directory must be a path.")
-        working_directory = _resolve_path(
-            working_directory_value.strip(), base_directory
-        )
-        if not working_directory.is_dir():
-            raise ConfigError(
-                f"{context}.working_directory does not exist or is not a directory: "
-                f"{working_directory}"
-            )
-
-        ansible_venv_value = job_data.get("ansible_venv")
-        ansible_venv = None
-        if ansible_venv_value is not None:
-            if not isinstance(ansible_venv_value, str) or not ansible_venv_value.strip():
-                raise ConfigError(f"{context}.ansible_venv must be a path.")
-            ansible_venv = _resolve_path(
-                ansible_venv_value.strip(), working_directory
-            )
-            if not ansible_venv.is_dir():
-                raise ConfigError(
-                    f"{context}.ansible_venv does not exist or is not a directory: "
-                    f"{ansible_venv}"
-                )
-
-        playbook_value = _required_string(job_data, "playbook", context)
-        inventory_value = _required_string(job_data, "inventory", context)
-        playbook = _resolve_path(playbook_value, working_directory)
-        inventory = _resolve_path(inventory_value, working_directory)
-        if not playbook.is_file():
-            raise ConfigError(f"{context}.playbook is not a file: {playbook}")
-        if not inventory.exists():
-            raise ConfigError(f"{context}.inventory does not exist: {inventory}")
-
-        timeout_seconds = job_data.get("timeout_seconds", 3600)
-        if type(timeout_seconds) is not int or timeout_seconds < 1:
-            raise ConfigError(f"{context}.timeout_seconds must be a positive integer.")
-
-        extra_args = job_data.get("extra_args", [])
-        if not isinstance(extra_args, list) or not all(
-            isinstance(argument, str) and argument for argument in extra_args
-        ):
-            raise ConfigError(f"{context}.extra_args must be a list of non-empty strings.")
-
-        job = Job(
-            name=name,
-            cron=cron,
-            playbook=playbook,
-            inventory=inventory,
-            working_directory=working_directory,
-            timeout_seconds=timeout_seconds,
-            extra_args=tuple(extra_args),
-            ansible_venv=ansible_venv,
-        )
-        if job.ansible_playbook_executable is not None and not (
-            job.ansible_playbook_executable.is_file()
-        ):
-            raise ConfigError(
-                f"{context}.ansible_venv does not contain ansible-playbook: "
-                f"{job.ansible_playbook_executable}"
-            )
-        jobs.append(job)
-
-    return AppConfig(
-        config_path=path,
-        timezone=timezone,
-        runs_directory=runs_directory,
-        reports_directory=reports_directory,
-        retention_days=retention_days,
-        jobs=tuple(jobs),
-        max_parallel_jobs=max_parallel_jobs,
-        report_output_lines=report_output_lines,
-    )
+    return _build_config(path, data)

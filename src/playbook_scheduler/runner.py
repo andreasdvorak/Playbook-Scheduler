@@ -153,6 +153,112 @@ def record_skipped_run(job: Job, runs_directory: Path, reason: str) -> dict[str,
     return result
 
 
+def _ansible_environment(job: Job) -> dict[str, str]:
+    """Build the process environment with the scheduler metrics callback enabled."""
+    environment = os.environ.copy()
+    if job.ansible_venv is not None:
+        executable_directory = "Scripts" if os.name == "nt" else "bin"
+        virtualenv_bin = str(job.ansible_venv / executable_directory)
+        environment["PATH"] = os.pathsep.join(
+            [virtualenv_bin, environment.get("PATH", "")]
+        )
+        environment["VIRTUAL_ENV"] = str(job.ansible_venv)
+
+    metrics_directory = Path(__file__).parent / "callback_plugins"
+    callback_paths = [
+        str(metrics_directory),
+        *filter(None, environment.get("ANSIBLE_CALLBACK_PLUGINS", "").split(os.pathsep)),
+    ]
+    environment["ANSIBLE_CALLBACK_PLUGINS"] = os.pathsep.join(callback_paths)
+    enabled_callbacks = [
+        callback.strip()
+        for callback in environment.get("ANSIBLE_CALLBACKS_ENABLED", "").split(",")
+        if callback.strip()
+    ]
+    if "playbook_scheduler_metrics" not in enabled_callbacks:
+        enabled_callbacks.append("playbook_scheduler_metrics")
+    environment["ANSIBLE_CALLBACKS_ENABLED"] = ",".join(enabled_callbacks)
+    return environment
+
+
+def _start_process(
+    job: Job, result: dict[str, Any], environment: dict[str, str]
+) -> subprocess.Popen[str] | None:
+    """Start Ansible, recording and returning ``None`` on start errors."""
+    try:
+        return subprocess.Popen(
+            result["command"],
+            cwd=job.working_directory,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+        )
+    except OSError as error:
+        result["error"] = f"Could not start ansible-playbook: {error}"
+        return None
+
+
+def _run_process(
+    process: subprocess.Popen[str], job: Job, result: dict[str, Any]
+) -> bool:
+    """Collect process output and return whether it completed normally."""
+    process_completed = False
+    with process as running_process:
+        with _running_lock:
+            _running_processes.add(running_process)
+            # Started just after stop_running_jobs() went through the set.
+            if _stop_requested.is_set():
+                running_process.terminate()
+        try:
+            try:
+                stdout, stderr = running_process.communicate(timeout=job.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = _stop_process(running_process)
+                result["error"] = f"Timed out after {job.timeout_seconds} seconds."
+            except BaseException:
+                # Ctrl+C during ``playbook-scheduler run``: do not leave Ansible running.
+                _stop_process(running_process)
+                raise
+            else:
+                result["return_code"] = running_process.returncode
+                if _stop_requested.is_set() and running_process.returncode != 0:
+                    result["error"] = "Interrupted by shutdown."
+                else:
+                    process_completed = True
+                    result["status"] = (
+                        "success" if running_process.returncode == 0 else "failed"
+                    )
+            result["stdout"] = stdout
+            result["stderr"] = stderr
+        finally:
+            with _running_lock:
+                _running_processes.discard(running_process)
+    return process_completed
+
+
+def _read_metrics(
+    metrics_file: Path, process_completed: bool, result: dict[str, Any]
+) -> None:
+    """Load callback metrics into the run record or explain why they are absent."""
+    if metrics_file.is_file():
+        try:
+            metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
+            if not isinstance(metrics, dict):
+                raise TypeError("Ansible callback metrics must be a JSON object.")
+            result["metrics"] = metrics
+        except (OSError, json.JSONDecodeError, TypeError) as error:
+            result["metrics_error"] = f"Could not read Ansible callback metrics: {error}"
+    elif process_completed:
+        result["metrics_error"] = (
+            "Ansible did not produce host metrics. Check that the configured "
+            "Ansible version supports callback plugins and that the callback "
+            "was not disabled by ansible.cfg."
+        )
+
+
 def run_job(job: Job, runs_directory: Path) -> dict[str, Any]:
     """Run the job's playbook once and record the outcome.
 
@@ -169,91 +275,17 @@ def run_job(job: Job, runs_directory: Path) -> dict[str, Any]:
         captured output, and host metrics.
     """
     started = datetime.now(timezone.utc)
-    metrics_directory = Path(__file__).parent / "callback_plugins"
-    environment = os.environ.copy()
-    if job.ansible_venv is not None:
-        executable_directory = "Scripts" if os.name == "nt" else "bin"
-        virtualenv_bin = str(job.ansible_venv / executable_directory)
-        environment["PATH"] = os.pathsep.join(
-            [virtualenv_bin, environment.get("PATH", "")]
-        )
-        environment["VIRTUAL_ENV"] = str(job.ansible_venv)
-    callback_paths = [
-        str(metrics_directory),
-        *filter(None, environment.get("ANSIBLE_CALLBACK_PLUGINS", "").split(os.pathsep)),
-    ]
-    environment["ANSIBLE_CALLBACK_PLUGINS"] = os.pathsep.join(callback_paths)
-    enabled_callbacks = [
-        callback.strip()
-        for callback in environment.get("ANSIBLE_CALLBACKS_ENABLED", "").split(",")
-        if callback.strip()
-    ]
-    if "playbook_scheduler_metrics" not in enabled_callbacks:
-        enabled_callbacks.append("playbook_scheduler_metrics")
-    environment["ANSIBLE_CALLBACKS_ENABLED"] = ",".join(enabled_callbacks)
+    environment = _ansible_environment(job)
     result = _new_result(job, started)
 
     with tempfile.TemporaryDirectory(prefix="playbook-scheduler-metrics-") as temporary_dir:
         metrics_file = Path(temporary_dir) / "metrics.json"
         environment["PLAYBOOK_SCHEDULER_METRICS_FILE"] = str(metrics_file)
-        process_completed = False
-        try:
-            process = subprocess.Popen(
-                result["command"],
-                cwd=job.working_directory,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=environment,
-            )
-        except OSError as error:
-            result["error"] = f"Could not start ansible-playbook: {error}"
-        else:
-            with _running_lock:
-                _running_processes.add(process)
-                # Started just after stop_running_jobs() went through the set.
-                if _stop_requested.is_set():
-                    process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=job.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = _stop_process(process)
-                result["error"] = f"Timed out after {job.timeout_seconds} seconds."
-            except BaseException:
-                # Ctrl+C during ``playbook-scheduler run``: do not leave Ansible running.
-                _stop_process(process)
-                raise
-            else:
-                result["return_code"] = process.returncode
-                if _stop_requested.is_set() and process.returncode != 0:
-                    result["error"] = "Interrupted by shutdown."
-                else:
-                    process_completed = True
-                    result["status"] = (
-                        "success" if process.returncode == 0 else "failed"
-                    )
-            finally:
-                with _running_lock:
-                    _running_processes.discard(process)
-            result["stdout"] = stdout
-            result["stderr"] = stderr
-
-        if metrics_file.is_file():
-            try:
-                metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
-                if not isinstance(metrics, dict):
-                    raise TypeError("Ansible callback metrics must be a JSON object.")
-                result["metrics"] = metrics
-            except (OSError, json.JSONDecodeError, TypeError) as error:
-                result["metrics_error"] = f"Could not read Ansible callback metrics: {error}"
-        elif process_completed:
-            result["metrics_error"] = (
-                "Ansible did not produce host metrics. Check that the configured "
-                "Ansible version supports callback plugins and that the callback "
-                "was not disabled by ansible.cfg."
-            )
+        process = _start_process(job, result, environment)
+        process_completed = (
+            _run_process(process, job, result) if process is not None else False
+        )
+        _read_metrics(metrics_file, process_completed, result)
 
     ended = datetime.now(timezone.utc)
     result["ended_at"] = ended.isoformat()

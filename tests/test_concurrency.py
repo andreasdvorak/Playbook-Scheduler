@@ -1,3 +1,5 @@
+"""Tests for file locking, scheduled runs, and runtime configuration behavior."""
+
 import json
 import logging
 import os
@@ -21,6 +23,7 @@ from playbook_scheduler.service import JobAlreadyRunning, execute_job
 
 
 def make_config(tmp_path: Path) -> AppConfig:
+    """Build an application config with a single local job."""
     job = Job(
         name="local_ping",
         cron="0 2 * * *",
@@ -41,6 +44,7 @@ def make_config(tmp_path: Path) -> AppConfig:
 
 
 def test_non_blocking_lock_is_busy_while_held(tmp_path: Path) -> None:
+    """Reject non-blocking lock acquisition while another holder owns it."""
     path = tmp_path / "locks" / "job.lock"
     with file_lock(path), pytest.raises(LockBusy), file_lock(path, blocking=False):
         pass
@@ -51,11 +55,13 @@ def test_non_blocking_lock_is_busy_while_held(tmp_path: Path) -> None:
 
 
 def test_blocking_lock_waits_for_other_thread(tmp_path: Path) -> None:
+    """Wait for a lock held by another thread, then acquire it in order."""
     path = tmp_path / "report.lock"
     order: list[str] = []
     held = threading.Event()
 
     def holder() -> None:
+        """Hold the lock briefly so the main thread has to wait."""
         with file_lock(path):
             held.set()
             time.sleep(0.3)
@@ -72,6 +78,7 @@ def test_blocking_lock_waits_for_other_thread(tmp_path: Path) -> None:
 
 
 def test_atomic_write_replaces_file_without_leftovers(tmp_path: Path) -> None:
+    """Replace a file atomically and leave no temporary files behind."""
     target = tmp_path / "reports" / "index.html"
     atomic_write_text(target, "old")
     atomic_write_text(target, "new")
@@ -83,6 +90,7 @@ def test_atomic_write_replaces_file_without_leftovers(tmp_path: Path) -> None:
 def test_execute_job_skips_job_that_is_already_running(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Avoid starting duplicate work and record the skipped run and report."""
     config = make_config(tmp_path)
     started: list[str] = []
     monkeypatch.setattr(service, "run_job", lambda job, _: started.append(job.name))
@@ -91,7 +99,7 @@ def test_execute_job_skips_job_that_is_already_running(
     with file_lock(job_lock), pytest.raises(JobAlreadyRunning):
         execute_job(config.jobs[0], config)
 
-    assert started == []
+    assert not started
     skipped = json.loads(next(config.runs_directory.glob("*.json")).read_text())
     assert skipped["status"] == "skipped"
     assert skipped["error"] == "Skipped: Job local_ping is already running."
@@ -100,6 +108,7 @@ def test_execute_job_skips_job_that_is_already_running(
 
 
 def test_execute_job_runs_and_writes_report(tmp_path: Path, monkeypatch) -> None:
+    """Write a report after successfully executing a job."""
     config = make_config(tmp_path)
     monkeypatch.setattr(service, "run_job", lambda job, _: {"job": job.name})
 
@@ -109,6 +118,7 @@ def test_execute_job_runs_and_writes_report(tmp_path: Path, monkeypatch) -> None
 
 
 def test_run_command_reports_running_job(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Return the already-running exit code when the job lock is held."""
     config = make_config(tmp_path)
     monkeypatch.setattr(cli, "load_config", lambda _: config)
 
@@ -122,9 +132,11 @@ def test_run_command_reports_running_job(tmp_path: Path, monkeypatch, capsys) ->
 def test_scheduled_run_of_running_job_is_skipped(
     tmp_path: Path, monkeypatch, caplog
 ) -> None:
+    """Log a scheduled run as skipped when its job is already running."""
     config = make_config(tmp_path)
 
     def busy(job: Job, _: AppConfig) -> None:
+        """Simulate another run holding the job lock."""
         raise JobAlreadyRunning(f"Job {job.name} is already running.")
 
     monkeypatch.setattr(scheduler, "execute_job", busy)
@@ -137,6 +149,7 @@ def test_scheduled_run_of_running_job_is_skipped(
 def test_scheduled_run_logs_start_and_outcome(
     tmp_path: Path, monkeypatch, caplog
 ) -> None:
+    """Log both the start and failed outcome of a scheduled run."""
     config = make_config(tmp_path)
     caplog.set_level("INFO")
     monkeypatch.setattr(
@@ -162,6 +175,7 @@ def test_scheduled_run_logs_start_and_outcome(
 
 
 def test_configure_logging_adds_timestamps(capsys, monkeypatch) -> None:
+    """Include timestamps on ordinary stderr logging and suppress scheduler noise."""
     monkeypatch.delenv("JOURNAL_STREAM", raising=False)
     root = logging.getLogger()
     previous_handlers, previous_level = root.handlers[:], root.level
@@ -179,7 +193,10 @@ def test_configure_logging_adds_timestamps(capsys, monkeypatch) -> None:
     assert "noise" not in err
 
 
-def test_configure_logging_uses_syslog_priorities_under_journal(capsys, monkeypatch) -> None:
+def test_configure_logging_uses_syslog_priorities_under_journal(
+    capsys, monkeypatch
+) -> None:
+    """Prefix journal output lines with their syslog priorities."""
     monkeypatch.setattr(scheduler, "_stderr_is_journal", lambda: True)
     root = logging.getLogger()
     previous_handlers, previous_level = root.handlers[:], root.level
@@ -202,22 +219,26 @@ def test_configure_logging_uses_syslog_priorities_under_journal(capsys, monkeypa
     ]
 
 
-def test_stderr_is_journal_compares_journal_stream(tmp_path, monkeypatch) -> None:
+def test_stderr_is_journal_compares_journal_stream(
+    tmp_path, monkeypatch
+) -> None:  # pylint: disable=protected-access
+    """Recognize stderr only when its device and inode match JOURNAL_STREAM."""
     with (tmp_path / "stderr").open("w") as stream:
         status = os.fstat(stream.fileno())
         monkeypatch.setattr(scheduler.sys, "stderr", stream)
 
         monkeypatch.setenv("JOURNAL_STREAM", f"{status.st_dev}:{status.st_ino}")
-        assert scheduler._stderr_is_journal()
+        assert scheduler._stderr_is_journal()  # pylint: disable=protected-access
 
         monkeypatch.setenv("JOURNAL_STREAM", f"{status.st_dev}:{status.st_ino + 1}")
-        assert not scheduler._stderr_is_journal()
+        assert not scheduler._stderr_is_journal()  # pylint: disable=protected-access
 
         monkeypatch.delenv("JOURNAL_STREAM")
-        assert not scheduler._stderr_is_journal()
+        assert not scheduler._stderr_is_journal()  # pylint: disable=protected-access
 
 
 def write_config(directory: Path, extra: str) -> Path:
+    """Write a minimal job config prefixed by additional application options."""
     (directory / "playbook.yml").write_text("---\n", encoding="utf-8")
     (directory / "hosts.ini").write_text("localhost\n", encoding="utf-8")
     config_path = directory / "config.yaml"
@@ -235,10 +256,12 @@ jobs:
 
 
 def test_max_parallel_jobs_defaults_to_ten(tmp_path: Path) -> None:
+    """Use the documented default maximum number of parallel jobs."""
     assert load_config(write_config(tmp_path, "")).max_parallel_jobs == 10
 
 
 def test_report_output_lines_is_read_and_validated(tmp_path: Path) -> None:
+    """Load the report output line limit and reject non-positive values."""
     assert load_config(write_config(tmp_path, "")).report_output_lines == 200
     config = load_config(write_config(tmp_path, "report_output_lines: 50"))
     assert config.report_output_lines == 50
@@ -247,6 +270,7 @@ def test_report_output_lines_is_read_and_validated(tmp_path: Path) -> None:
 
 
 def test_max_parallel_jobs_is_read(tmp_path: Path) -> None:
+    """Load an explicitly configured parallel job limit."""
     config = load_config(write_config(tmp_path, "max_parallel_jobs: 2"))
 
     assert config.max_parallel_jobs == 2
@@ -254,5 +278,6 @@ def test_max_parallel_jobs_is_read(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("value", ["0", "two", "1.5"])
 def test_invalid_max_parallel_jobs_is_reported(tmp_path: Path, value: str) -> None:
+    """Reject invalid configured values for maximum parallel jobs."""
     with pytest.raises(ConfigError, match="max_parallel_jobs"):
         load_config(write_config(tmp_path, f"max_parallel_jobs: {value}"))

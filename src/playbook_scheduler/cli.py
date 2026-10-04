@@ -6,7 +6,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from playbook_scheduler.config import ConfigError, find_ansible_playbook, load_config
+from playbook_scheduler.config import (
+    AppConfig,
+    ConfigError,
+    find_ansible_playbook,
+    load_config,
+)
 from playbook_scheduler.scheduler import configure_logging, run_scheduler
 from playbook_scheduler.service import JobAlreadyRunning, execute_job, refresh_report
 
@@ -36,6 +41,62 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate(config: AppConfig) -> int:
+    """Validate the configured jobs and their Ansible executables."""
+    missing = False
+    for job in config.jobs:
+        executable = find_ansible_playbook(job)
+        if executable is not None:
+            print(f"{job.name}: {executable}")
+            continue
+
+        missing = True
+        if job.ansible_venv is not None:
+            message = (
+                f"{job.name}: ansible-playbook is not executable: "
+                f"{job.ansible_playbook_executable}"
+            )
+        else:
+            message = (
+                f"{job.name}: ansible-playbook not found on PATH; "
+                "install ansible-core or set ansible_venv."
+            )
+        print(message, file=sys.stderr)
+
+    if missing:
+        return 2
+    print(f"Configuration is valid: {config.config_path}")
+    return 0
+
+
+def _run_job(job_name: str, config: AppConfig) -> int:
+    """Run a configured job and display its result."""
+    job = next((job for job in config.jobs if job.name == job_name), None)
+    if job is None:
+        print(f"Unknown job: {job_name}", file=sys.stderr)
+        return 2
+
+    try:
+        result = execute_job(job, config)
+    except JobAlreadyRunning as error:
+        print(str(error), file=sys.stderr)
+        return 3
+
+    print(
+        f"{result['job']}: {result['status']} "
+        f"(run {result['run_id']}, {result['duration_seconds']}s)"
+    )
+    if result["status"] == "success":
+        return 0
+    if result["error"]:
+        print(f"Error: {result['error']}", file=sys.stderr)
+    if result["stdout"]:
+        print(f"Ansible stdout:\n{result['stdout']}", file=sys.stderr)
+    if result["stderr"]:
+        print(f"Ansible stderr:\n{result['stderr']}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the command given on the command line.
 
@@ -51,64 +112,21 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         config = load_config(arguments.config)
-        if arguments.command == "validate":
-            missing = False
-            for job in config.jobs:
-                executable = find_ansible_playbook(job)
-                if executable is not None:
-                    print(f"{job.name}: {executable}")
-                elif job.ansible_venv is not None:
-                    missing = True
-                    print(
-                        f"{job.name}: ansible-playbook is not executable: "
-                        f"{job.ansible_playbook_executable}",
-                        file=sys.stderr,
-                    )
-                else:
-                    missing = True
-                    print(
-                        f"{job.name}: ansible-playbook not found on PATH; "
-                        "install ansible-core or set ansible_venv.",
-                        file=sys.stderr,
-                    )
-            if missing:
-                return 2
-            print(f"Configuration is valid: {config.config_path}")
-            return 0
-        if arguments.command == "run":
-            job = next((job for job in config.jobs if job.name == arguments.job_name), None)
-            if job is None:
-                print(f"Unknown job: {arguments.job_name}", file=sys.stderr)
-                return 2
-            try:
-                result = execute_job(job, config)
-            except JobAlreadyRunning as error:
-                print(str(error), file=sys.stderr)
-                return 3
-            print(
-                f"{result['job']}: {result['status']} "
-                f"(run {result['run_id']}, {result['duration_seconds']}s)"
-            )
-            if result["status"] == "success":
-                return 0
-            if result["error"]:
-                print(f"Error: {result['error']}", file=sys.stderr)
-            if result["stdout"]:
-                print(f"Ansible stdout:\n{result['stdout']}", file=sys.stderr)
-            if result["stderr"]:
-                print(f"Ansible stderr:\n{result['stderr']}", file=sys.stderr)
-            return 1
-        if arguments.command == "report":
-            print(f"Report written to {refresh_report(config)}")
-            return 0
-        if arguments.command == "serve":
-            configure_logging()
-            run_scheduler(config)
-            return 0
     except ConfigError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
-    return 2
+
+    if arguments.command == "validate":
+        return _validate(config)
+    if arguments.command == "run":
+        return _run_job(arguments.job_name, config)
+    if arguments.command == "report":
+        print(f"Report written to {refresh_report(config)}")
+        return 0
+
+    configure_logging()
+    run_scheduler(config)
+    return 0
 
 
 if __name__ == "__main__":

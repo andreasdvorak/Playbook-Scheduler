@@ -54,8 +54,8 @@ class CallbackModule(CallbackBase):
         """
         if ignore_errors:
             return
-        host_name = result._host.get_name()
-        task_name = result._task.get_name().strip()
+        host_name = result._host.get_name()  # pylint: disable=protected-access
+        task_name = result._task.get_name().strip()  # pylint: disable=protected-access
         self._failed_tasks[(host_name, task_name)] = {
             "host": host_name,
             "task": task_name,

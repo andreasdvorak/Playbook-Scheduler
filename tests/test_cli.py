@@ -1,3 +1,8 @@
+"""Tests for the command-line interface."""
+
+# Keep module-local test fixtures self-contained across test modules.
+# pylint: disable=duplicate-code
+
 import os
 from pathlib import Path
 
@@ -10,6 +15,7 @@ from playbook_scheduler.config import AppConfig, Job
 def test_run_command_displays_process_start_error(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    """Report a failed Ansible process start and return a failure code."""
     job = Job(
         name="local_ping",
         cron="0 2 * * *",
@@ -51,6 +57,7 @@ def test_run_command_displays_process_start_error(
 
 
 def write_validate_config(tmp_path: Path, venv: str = "") -> Path:
+    """Write a minimal validation configuration and its referenced files."""
     (tmp_path / "ping.yml").write_text("---\n", encoding="utf-8")
     (tmp_path / "hosts.ini").write_text("localhost\n", encoding="utf-8")
     config_path = tmp_path / "config.yaml"
@@ -69,6 +76,7 @@ def write_validate_config(tmp_path: Path, venv: str = "") -> Path:
 def test_validate_reports_ansible_playbook_missing_on_path(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    """Report a missing Ansible executable found through PATH."""
     config_path = write_validate_config(tmp_path)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
 
@@ -84,6 +92,7 @@ def test_validate_reports_ansible_playbook_missing_on_path(
 def test_validate_checks_ansible_playbook_in_virtualenv(
     tmp_path: Path, capsys
 ) -> None:
+    """Require the configured virtualenv executable to be runnable."""
     executable = tmp_path / ".venv" / "bin" / "ansible-playbook"
     executable.parent.mkdir(parents=True)
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
