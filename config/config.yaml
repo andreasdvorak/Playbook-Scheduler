@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=../config.schema.json
+---
+timezone: Europe/Berlin
+runs_directory: ../runs
+reports_directory: ../reports
+retention_days: 30
+
+jobs:
+  - name: local_ping
+    cron: "0 2 * * *"
+    playbook: examples/playbooks/ping.yml
+    inventory: examples/inventory/hosts.ini
+    working_directory: ..
+    timeout_seconds: 3600
+    extra_args: []
+  - name: local_ping2
+    cron: "0 2 * * *"
+    playbook: examples/playbooks/ping.yml
+    inventory: examples/inventory/hosts.ini
+    working_directory: ..
+    timeout_seconds: 3600
+    extra_args: []

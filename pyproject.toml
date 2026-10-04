@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "playbook-scheduler"
+version = "0.1.0"
+description = "A file-based scheduler and reporter for Ansible playbooks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "APScheduler>=3.10,<4",
+    "Jinja2>=3.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff==0.16.10",
+    "yamllint==1.38.0",
+]
+
+ansible = ["ansible-core==2.21.4"]
+
+[project.scripts]
+playbook-scheduler = "playbook_scheduler.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+playbook_scheduler = ["templates/*.j2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff.lint]
+# D: docstrings (PEP 257, Google convention), ANN: type hints (PEP 484).
+extend-select = ["D", "ANN"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN"]

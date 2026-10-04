@@ -1,0 +1,375 @@
+{%- macro duration(seconds) -%}
+  {%- if seconds is none -%}—
+  {%- elif seconds < 60 -%}{{ "%.1f"|format(seconds) }} s
+  {%- elif seconds < 3600 -%}{{ (seconds // 60)|int }}m {{ "%02d"|format((seconds % 60)|int) }}s
+  {%- else -%}{{ (seconds // 3600)|int }}h {{ "%02d"|format(((seconds % 3600) // 60)|int) }}m
+  {%- endif -%}
+{%- endmacro -%}
+{%- macro timestamp(value) -%}{{ value[:19]|replace("T", " ") }}{%- endmacro -%}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ansible run report</title>
+    <style>
+      :root {
+        --bg: #f4f6f9;
+        --surface: #ffffff;
+        --surface-2: #f0f2f6;
+        --border: #dfe3ea;
+        --text: #1d2330;
+        --muted: #667085;
+        --accent: #3b5bdb;
+        --success: #1a7f45;
+        --success-bg: #e3f5ea;
+        --failed: #c0322b;
+        --failed-bg: #fde8e7;
+        --changed: #b26a00;
+        --changed-bg: #fff3dc;
+        --unreachable: #7c3aed;
+        --unreachable-bg: #f0e8ff;
+        --code-bg: #0f1420;
+        --code-text: #d7dce6;
+        --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e1117;
+          --surface: #171b24;
+          --surface-2: #1e2330;
+          --border: #2b3242;
+          --text: #e6e9ef;
+          --muted: #98a2b3;
+          --accent: #7c95ff;
+          --success: #4ccb7f;
+          --success-bg: #12301f;
+          --failed: #ff6b62;
+          --failed-bg: #3a1614;
+          --changed: #f5b544;
+          --changed-bg: #352611;
+          --unreachable: #b794ff;
+          --unreachable-bg: #2a1d45;
+          --code-bg: #0a0d13;
+          --shadow: none;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+      }
+      .container { margin: 0 auto; max-width: 80rem; padding: 2rem 1rem 4rem; }
+      header.page { align-items: baseline; display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; margin-bottom: 1.5rem; }
+      header.page h1 { font-size: 1.6rem; margin: 0; }
+      header.page h1 span { color: var(--accent); }
+      .generated { color: var(--muted); font-size: .9rem; }
+
+      .stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin-bottom: 1rem; }
+      .stat { background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); padding: 1rem 1.25rem; }
+      .stat-label { color: var(--muted); font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
+      .stat-value { font-size: 1.8rem; font-variant-numeric: tabular-nums; font-weight: 650; }
+      .stat-value.success { color: var(--success); }
+      .stat-value.failed { color: var(--failed); }
+
+      .timeline { background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); margin-bottom: 1rem; padding: 1rem 1.25rem; }
+      .timeline-bars { align-items: flex-end; display: flex; gap: 3px; height: 2.25rem; margin-top: .5rem; }
+      .timeline-bars span { border-radius: 3px; flex: 1 1 0; height: 100%; max-width: 1.25rem; min-width: 4px; }
+      .timeline-bars .success { background: var(--success); }
+      .timeline-bars .failed { background: var(--failed); }
+      .timeline-bars .skipped { background: var(--muted); opacity: .45; }
+
+      .filter { align-items: end; background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-bottom: 1.5rem; padding: 1rem 1.25rem; }
+      .filter-group { display: flex; flex-direction: column; gap: .25rem; }
+      .filter-group label { color: var(--muted); font-size: .8rem; }
+      .filter input, .filter select, .filter button {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: .5rem;
+        color: var(--text);
+        font: inherit;
+        padding: .45rem .6rem;
+      }
+      .filter input:focus, .filter select:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); }
+      .filter input[type="search"] { width: 16rem; max-width: 100%; }
+      .filter-actions { align-items: center; display: flex; gap: .75rem; margin-left: auto; }
+      .filter button { cursor: pointer; }
+      .filter button:hover { border-color: var(--accent); color: var(--accent); }
+      #run-count { color: var(--muted); font-size: .9rem; }
+
+      .runs { display: flex; flex-direction: column; gap: .75rem; }
+      .run { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); padding: 1rem 1.25rem; }
+      .run[data-status="success"] { border-left-color: var(--success); }
+      .run[data-status="failed"] { border-left-color: var(--failed); }
+      .run[data-status="skipped"] { border-left-color: var(--muted); }
+      .run-head { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+      .run-job { font-size: 1.1rem; font-weight: 600; }
+      .run-meta { color: var(--muted); display: flex; flex-wrap: wrap; font-size: .9rem; font-variant-numeric: tabular-nums; gap: .25rem 1.25rem; margin-left: auto; }
+      .run-meta b { color: var(--text); font-weight: 500; }
+
+      .badge { border-radius: 999px; display: inline-block; font-size: .78rem; font-weight: 600; letter-spacing: .02em; padding: .1rem .6rem; text-transform: uppercase; }
+      .badge.success { background: var(--success-bg); color: var(--success); }
+      .badge.failed { background: var(--failed-bg); color: var(--failed); }
+      .badge.skipped { background: var(--surface-2); color: var(--muted); }
+
+      .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+      .chip { background: var(--surface-2); border-radius: .4rem; font-size: .82rem; font-variant-numeric: tabular-nums; padding: .15rem .5rem; }
+      .chip.ok { background: var(--success-bg); color: var(--success); }
+      .chip.changed { background: var(--changed-bg); color: var(--changed); }
+      .chip.failed { background: var(--failed-bg); color: var(--failed); }
+      .chip.unreachable { background: var(--unreachable-bg); color: var(--unreachable); }
+
+      .error { background: var(--failed-bg); border-radius: .5rem; color: var(--failed); margin: .75rem 0 0; padding: .5rem .75rem; }
+      .error.note { background: var(--surface-2); color: var(--muted); }
+      .omitted { color: var(--muted); font-size: .85rem; margin: 0 0 .4rem; }
+
+      details { border-top: 1px solid var(--border); margin-top: .75rem; padding-top: .5rem; }
+      details + details { margin-top: .25rem; }
+      summary { color: var(--muted); cursor: pointer; font-size: .9rem; user-select: none; }
+      summary:hover { color: var(--accent); }
+      details[open] > summary { color: var(--text); margin-bottom: .5rem; }
+      pre {
+        background: var(--code-bg);
+        border-radius: .5rem;
+        color: var(--code-text);
+        font: 12.5px/1.5 ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+        margin: 0;
+        max-height: 32rem;
+        overflow: auto;
+        padding: .9rem 1rem;
+        white-space: pre-wrap;
+      }
+
+      .table-wrap { overflow-x: auto; }
+      table { border-collapse: collapse; font-variant-numeric: tabular-nums; width: 100%; }
+      th, td { border-bottom: 1px solid var(--border); padding: .45rem .6rem; text-align: right; }
+      th:first-child, td:first-child { text-align: left; }
+      th { color: var(--muted); font-size: .78rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+      tbody tr:hover { background: var(--surface-2); }
+      td.zero { color: var(--muted); opacity: .5; }
+      td.ok { color: var(--success); font-weight: 600; }
+      td.changed { color: var(--changed); font-weight: 600; }
+      td.failed { color: var(--failed); font-weight: 600; }
+      td.unreachable { color: var(--unreachable); font-weight: 600; }
+      h4 { font-size: .85rem; margin: 1rem 0 .4rem; }
+      ul.failed-tasks { margin: 0; padding-left: 1.2rem; }
+
+      .empty { background: var(--surface); border: 1px dashed var(--border); border-radius: .75rem; color: var(--muted); padding: 2.5rem; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+    <header class="page">
+      <h1><span>▲</span> Ansible run report</h1>
+      {% if generated_at %}<div class="generated">Generated {{ generated_at }} UTC</div>{% endif %}
+    </header>
+    {% if runs %}
+    <section class="stats" aria-label="Summary">
+      <div class="stat"><div class="stat-label">Runs</div><div class="stat-value" id="stat-total">{{ runs|length }}</div></div>
+      <div class="stat"><div class="stat-label">Success rate</div><div class="stat-value success" id="stat-rate">—</div></div>
+      <div class="stat"><div class="stat-label">Failed</div><div class="stat-value failed" id="stat-failed">{{ runs|selectattr("status", "equalto", "failed")|list|length }}</div></div>
+      <div class="stat"><div class="stat-label">Skipped</div><div class="stat-value" id="stat-skipped">{{ runs|selectattr("status", "equalto", "skipped")|list|length }}</div></div>
+      <div class="stat"><div class="stat-label">Avg. duration</div><div class="stat-value" id="stat-duration">—</div></div>
+    </section>
+
+    <section class="timeline" aria-label="Recent runs">
+      <div class="stat-label">Last {{ [runs|length, 60]|min }} runs (oldest → newest)</div>
+      <div class="timeline-bars">
+        {% for run in runs[:60]|reverse %}
+        <span class="{{ run.status }}" title="{{ run.job }} · {{ timestamp(run.started_at) }} UTC · {{ run.status }}"></span>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="filter">
+      <div class="filter-group">
+        <label for="job-filter">Job name</label>
+        <input id="job-filter" type="search" autocomplete="off" placeholder="Filter by job…">
+      </div>
+      <div class="filter-group">
+        <label for="status-filter">Status</label>
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="success">Success</option>
+          <option value="failed">Failed</option>
+          <option value="skipped">Skipped</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="start-date-filter">From date (UTC)</label>
+        <input id="start-date-filter" type="date">
+      </div>
+      <div class="filter-group">
+        <label for="end-date-filter">To date (UTC)</label>
+        <input id="end-date-filter" type="date">
+      </div>
+      <div class="filter-actions">
+        <span id="run-count" aria-live="polite"></span>
+        <button id="reset-filters" type="button">Reset filters</button>
+      </div>
+    </div>
+
+    <div class="runs">
+      {% for run in runs %}
+      <article class="run run-row" data-job="{{ run.job }}" data-status="{{ run.status }}" data-date="{{ run.started_at[:10] }}" data-duration="{{ run.duration_seconds if run.duration_seconds is not none and run.status != 'skipped' else '' }}">
+        <div class="run-head">
+          <span class="badge {{ run.status }}">{{ run.status }}</span>
+          <span class="run-job">{{ run.job }}</span>
+          <div class="run-meta">
+            <span>Started <b>{{ timestamp(run.started_at) }}</b> UTC</span>
+            <span>Duration <b>{{ duration(none if run.status == "skipped" else run.duration_seconds) }}</b></span>
+            <span>Exit code <b>{{ run.return_code if run.return_code is not none else "—" }}</b></span>
+          </div>
+        </div>
+
+        {% if run.metrics %}
+        <div class="chips">
+          <span class="chip">{{ run.metrics.hosts_total }} hosts</span>
+          {% if run.metrics.hosts_ok %}<span class="chip ok">{{ run.metrics.hosts_ok }} ok</span>{% endif %}
+          {% if run.metrics.hosts_changed %}<span class="chip changed">{{ run.metrics.hosts_changed }} changed</span>{% endif %}
+          {% if run.metrics.hosts_failed %}<span class="chip failed">{{ run.metrics.hosts_failed }} failed</span>{% endif %}
+          {% if run.metrics.hosts_unreachable %}<span class="chip unreachable">{{ run.metrics.hosts_unreachable }} unreachable</span>{% endif %}
+          {% if run.metrics.tasks_failed %}<span class="chip failed">{{ run.metrics.tasks_failed }} failed tasks</span>{% endif %}
+        </div>
+        {% endif %}
+
+        {% if run.error %}<p class="error{{ ' note' if run.status == 'skipped' }}">{{ run.error }}</p>{% endif %}
+        {% if run.metrics_error %}<p class="error">Host metrics unavailable: {{ run.metrics_error }}</p>{% endif %}
+
+        {% if run.metrics %}
+        <details>
+          <summary>
+            Hosts: {{ run.metrics.hosts_total }}
+            ({{ run.metrics.hosts_ok }} OK,
+            {{ run.metrics.hosts_changed }} changed,
+            {{ run.metrics.hosts_failed }} failed,
+            {{ run.metrics.hosts_unreachable }} unreachable,
+            {{ run.metrics.tasks_failed }} failed tasks)
+          </summary>
+          {% if run.metrics.hosts %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Host</th><th>OK</th><th>Changed</th><th>Failed</th><th>Unreachable</th><th>Skipped</th><th>Ignored</th></tr>
+              </thead>
+              <tbody>
+                {% for host in run.metrics.hosts %}
+                <tr>
+                  <td>{{ host.name }}</td>
+                  {% for key in ["ok", "changed", "failed", "unreachable", "skipped", "ignored"] %}
+                  <td class="{{ key if host[key] else 'zero' }}">{{ host[key] }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+          {% if run.metrics.failed_tasks %}
+          <h4>Failed tasks</h4>
+          <ul class="failed-tasks">
+            {% for task in run.metrics.failed_tasks %}
+            <li>{{ task.task }} on {{ task.host }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </details>
+        {% endif %}
+        {% for label, output in [("Standard output", run.stdout), ("Standard error", run.stderr)] if output %}
+        {% set text, omitted = tail(output) %}
+        <details>
+          <summary>{{ label }}{% if omitted %} (last {{ max_output_lines }} lines){% endif %}</summary>
+          {% if omitted %}<p class="omitted">{{ omitted }} earlier lines omitted. The full output is in <code>{{ run.record_file }}</code>.</p>{% endif %}
+          <pre>{{ text }}</pre>
+        </details>
+        {% endfor %}
+      </article>
+      {% endfor %}
+    </div>
+    <p id="no-matching-jobs" class="empty" hidden>No runs match the selected filters.</p>
+    <script>
+      const jobFilter = document.getElementById("job-filter");
+      const statusFilter = document.getElementById("status-filter");
+      const startDateFilter = document.getElementById("start-date-filter");
+      const endDateFilter = document.getElementById("end-date-filter");
+      const runRows = document.querySelectorAll(".run-row");
+      const noMatchingJobs = document.getElementById("no-matching-jobs");
+      const resetFilters = document.getElementById("reset-filters");
+      const runCount = document.getElementById("run-count");
+      const statTotal = document.getElementById("stat-total");
+      const statRate = document.getElementById("stat-rate");
+      const statFailed = document.getElementById("stat-failed");
+      const statSkipped = document.getElementById("stat-skipped");
+      const statDuration = document.getElementById("stat-duration");
+
+      const formatDuration = (seconds) => {
+        if (seconds < 60) return `${seconds.toFixed(1)} s`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(Math.floor(seconds % 60)).padStart(2, "0")}s`;
+        return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`;
+      };
+
+      const updateStats = (rows) => {
+        const failed = rows.filter((row) => row.dataset.status === "failed").length;
+        const succeeded = rows.filter((row) => row.dataset.status === "success").length;
+        const skipped = rows.filter((row) => row.dataset.status === "skipped").length;
+        // Skipped runs never started Ansible, so they do not count towards the rate.
+        const executed = rows.length - skipped;
+        const durations = rows
+          .map((row) => parseFloat(row.dataset.duration))
+          .filter((value) => !Number.isNaN(value));
+        statTotal.textContent = rows.length;
+        statFailed.textContent = failed;
+        statSkipped.textContent = skipped;
+        statRate.textContent = executed ? `${Math.round((succeeded / executed) * 100)} %` : "—";
+        statDuration.textContent = durations.length
+          ? formatDuration(durations.reduce((sum, value) => sum + value, 0) / durations.length)
+          : "—";
+      };
+
+      const applyFilters = () => {
+        const query = jobFilter.value.trim().toLocaleLowerCase();
+        let visibleRows = 0;
+        const totalRows = runRows.length;
+        const matchingRows = [];
+
+        runRows.forEach((row) => {
+          const matchesJob = row.dataset.job.toLocaleLowerCase().includes(query);
+          const matchesStatus =
+            !statusFilter.value || row.dataset.status === statusFilter.value;
+          const matchesStartDate =
+            !startDateFilter.value || row.dataset.date >= startDateFilter.value;
+          const matchesEndDate =
+            !endDateFilter.value || row.dataset.date <= endDateFilter.value;
+          const matches =
+            matchesJob && matchesStatus && matchesStartDate && matchesEndDate;
+          row.hidden = !matches;
+          visibleRows += Number(matches);
+          if (matches) matchingRows.push(row);
+        });
+
+        noMatchingJobs.hidden = visibleRows > 0;
+        runCount.textContent = `Showing ${visibleRows} of ${totalRows} runs`;
+        updateStats(matchingRows);
+      };
+
+      jobFilter.addEventListener("input", applyFilters);
+      statusFilter.addEventListener("change", applyFilters);
+      startDateFilter.addEventListener("change", applyFilters);
+      endDateFilter.addEventListener("change", applyFilters);
+      resetFilters.addEventListener("click", () => {
+        jobFilter.value = "";
+        statusFilter.value = "";
+        startDateFilter.value = "";
+        endDateFilter.value = "";
+        applyFilters();
+      });
+      applyFilters();
+    </script>
+    {% else %}
+    <p class="empty">No Ansible runs have been recorded yet.</p>
+    {% endif %}
+    </div>
+  </body>
+</html>
