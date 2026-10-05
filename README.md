@@ -31,10 +31,29 @@ SDK is required; playbooks are started with the `ansible-playbook` command.
   collections or roles.
 
 ## Installation
+You can eigther do the install vai PyPi or via git clone.
+
+The PyPi installation is recommended, if you already have an ansible environment installed. The PyPi does not install Ansible.
+
+With the souce code installation you can install everything you need to test the software without Ansible ready playbook. The source code brings little examples.
+
+### PyPi
+
+If you choose PyPi for the installation
 
 ```bash
-git clone https://github.com/andreasdvorak/Ansible_Runner.git
-cd Ansible_Runner
+pip install playbook-scheduler
+```
+
+The directory config needs to be created.
+
+The directories reports and runs are created, with the first job.
+
+### Source Code
+
+```bash
+git clone https://github.com/andreasdvorak/Playbook-Scheduler.git
+cd Playbook-Scheduler
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
