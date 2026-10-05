@@ -21,7 +21,7 @@ description:
   - Writes host statistics and failed task names to the path in
     C(PLAYBOOK_SCHEDULER_METRICS_FILE).
 requirements:
-  - Enabled by Playbook Scheduler for each playbook process.
+  - Discovered from the callback plugin path configured by Playbook Scheduler.
 """
 
 
@@ -35,7 +35,7 @@ class CallbackModule(CallbackBase):
     CALLBACK_VERSION = 2.0
     CALLBACK_TYPE = "aggregate"
     CALLBACK_NAME = "playbook_scheduler_metrics"
-    CALLBACK_NEEDS_ENABLED = True
+    CALLBACK_NEEDS_ENABLED = False
 
     def __init__(self) -> None:
         """Initialize the plugin and read the metrics file path."""

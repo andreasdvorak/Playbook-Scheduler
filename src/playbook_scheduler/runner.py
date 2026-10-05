@@ -154,7 +154,7 @@ def record_skipped_run(job: Job, runs_directory: Path, reason: str) -> dict[str,
 
 
 def _ansible_environment(job: Job) -> dict[str, str]:
-    """Build the process environment with the scheduler metrics callback enabled."""
+    """Build the process environment with the scheduler callback plugin available."""
     environment = os.environ.copy()
     if job.ansible_venv is not None:
         executable_directory = "Scripts" if os.name == "nt" else "bin"
@@ -170,14 +170,6 @@ def _ansible_environment(job: Job) -> dict[str, str]:
         *filter(None, environment.get("ANSIBLE_CALLBACK_PLUGINS", "").split(os.pathsep)),
     ]
     environment["ANSIBLE_CALLBACK_PLUGINS"] = os.pathsep.join(callback_paths)
-    enabled_callbacks = [
-        callback.strip()
-        for callback in environment.get("ANSIBLE_CALLBACKS_ENABLED", "").split(",")
-        if callback.strip()
-    ]
-    if "playbook_scheduler_metrics" not in enabled_callbacks:
-        enabled_callbacks.append("playbook_scheduler_metrics")
-    environment["ANSIBLE_CALLBACKS_ENABLED"] = ",".join(enabled_callbacks)
     return environment
 
 
@@ -255,16 +247,16 @@ def _read_metrics(
         result["metrics_error"] = (
             "Ansible did not produce host metrics. Check that the configured "
             "Ansible version supports callback plugins and that the callback "
-            "was not disabled by ansible.cfg."
+            "plugin is discoverable and loaded."
         )
 
 
 def run_job(job: Job, runs_directory: Path) -> dict[str, Any]:
     """Run the job's playbook once and record the outcome.
 
-    The ``playbook_scheduler_metrics`` callback plugin is enabled for the process
-    and its host metrics are added to the record. Failures, timeouts, and
-    start errors are recorded instead of raised.
+    The ``playbook_scheduler_metrics`` callback plugin is made discoverable for
+    the process and its host metrics are added to the record. Failures,
+    timeouts, and start errors are recorded instead of raised.
 
     Args:
         job: Job to run.

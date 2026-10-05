@@ -7,14 +7,14 @@ retention_days: 30
 
 jobs:
   - name: local_ping
-    cron: "0 2 * * *"
+    cron: "42 21 * * *"
     playbook: examples/playbooks/ping.yml
     inventory: examples/inventory/hosts.ini
     working_directory: ..
     timeout_seconds: 3600
     extra_args: []
   - name: local_ping2
-    cron: "0 2 * * *"
+    cron: "41 21 * * *"
     playbook: examples/playbooks/ping.yml
     inventory: examples/inventory/hosts.ini
     working_directory: ..

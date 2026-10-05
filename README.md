@@ -43,6 +43,7 @@ python -m pip install .
 
 Installing `ansible-core` in the same environment provides the
 `ansible-playbook` executable required to run the example jobs.
+But you need Python 3.12 or newer.
 
 ```bash
 python -m pip install -e ".[ansible]"
@@ -159,6 +160,9 @@ Generate or refresh the HTML report without starting a playbook:
 ```bash
 playbook-scheduler report
 ```
+
+The scheduler adds its metrics callback to Ansible's callback plugin search
+path without overriding `callbacks_enabled` from `ansible.cfg`.
 
 The report includes client-side filters for job name, status, and a UTC date
 range. Filters can be combined; the job-name search is case-insensitive and
