@@ -41,8 +41,14 @@ With the souce code installation you can install everything you need to test the
 
 If you choose PyPi for the installation
 
+To install the pip
 ```bash
 pip install playbook-scheduler
+```
+
+or to update
+```bash
+pip install --upgrade playbook-scheduler
 ```
 
 The directory config needs to be created.
