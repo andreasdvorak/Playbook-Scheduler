@@ -46,8 +46,11 @@ def fake_popen(*communicate, returncode=0, on_start=None):
     return Mock(side_effect=start), process
 
 
-def test_run_job_persists_success_result(tmp_path: Path) -> None:
+def test_run_job_persists_success_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Persist successful output and metrics with the expected command."""
+    monkeypatch.delenv("ANSIBLE_CALLBACKS_ENABLED", raising=False)
 
     def write_metrics(kwargs):
         """Write a valid metrics payload to the callback's configured path."""
@@ -65,9 +68,7 @@ def test_run_job_persists_success_result(tmp_path: Path) -> None:
     assert saved["stdout"] == "changed=1"
     assert saved["return_code"] == 0
     assert saved["metrics"] == {"hosts_total": 1, "hosts_changed": 1}
-    assert "playbook_scheduler_metrics" in popen.call_args.kwargs["env"][
-        "ANSIBLE_CALLBACKS_ENABLED"
-    ]
+    assert "ANSIBLE_CALLBACKS_ENABLED" not in popen.call_args.kwargs["env"]
     assert result["run_id"] in next((tmp_path / "runs").glob("*.json")).name
     assert process.communicate.call_args.kwargs["timeout"] == 15
     assert popen.call_args.args[0] == [
@@ -77,6 +78,22 @@ def test_run_job_persists_success_result(tmp_path: Path) -> None:
         str(tmp_path / "patch.yml"),
         "--check",
     ]
+
+
+def test_run_job_preserves_enabled_callbacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leave user-configured enabled callbacks unchanged in the child process."""
+    monkeypatch.setenv("ANSIBLE_CALLBACKS_ENABLED", "profile_tasks,timer")
+    popen, _ = fake_popen(("", ""))
+
+    with patch("playbook_scheduler.runner.subprocess.Popen", popen):
+        run_job(make_job(tmp_path), tmp_path / "runs")
+
+    assert (
+        popen.call_args.kwargs["env"]["ANSIBLE_CALLBACKS_ENABLED"]
+        == "profile_tasks,timer"
+    )
 
 
 def test_nonzero_exit_is_recorded_as_failed(tmp_path: Path) -> None:
