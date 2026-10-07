@@ -25,6 +25,7 @@ venv/
 
 # VSC
 *.code-workspace
+.vscode/
 
 # Ansible
 .ansible/

@@ -39,10 +39,15 @@ With the souce code installation you can install everything you need to test the
 
 ### PyPi
 
+Since Debian 12, Ubuntu 23.04+, Python 3.11/3.12 and PEP 668 you are not allowed to install a PyPi package without a virtual environment.
+
 If you choose PyPi for the installation
 
+#### venv
 To install the pip
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install playbook-scheduler
 ```
 
@@ -51,6 +56,36 @@ or to update
 pip install --upgrade playbook-scheduler
 ```
 
+#### pipx
+
+When the installation is with pipx it automatically creates a virtual environment.
+
+```bash
+sudo apt install pipx
+PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install playbook-scheduler
+```
+
+The `PIPX_HOME` and `PIPX_BIN_DIR` values above apply only to that `pipx`
+command. The account running it must be able to write to both directories.
+Without these overrides, pipx installs the command in the current user's
+`~/.local/bin` directory:
+
+```bash
+pipx ensurepath
+source ~/.bashrc
+```
+
+pipx installs the command-line application; it does **not** create a
+systemd unit. For unattended scheduling, create and enable a unit as shown in
+[Example systemd service](#example-systemd-service) below. If you use the
+pipx installation in that unit, set `ExecStart` to the absolute path of the
+installed `playbook-scheduler` command and make sure the unit's `User` can
+access the pipx virtual environment. A pipx installation belonging to a
+different user is not automatically available to the service account.
+
+
+
+### Directories
 The directory config needs to be created.
 
 The directories reports and runs are created, with the first job.
