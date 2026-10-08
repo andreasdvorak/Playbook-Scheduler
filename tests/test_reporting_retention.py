@@ -62,6 +62,9 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
     assert 'data-status="failed"' in html
     assert 'id="start-date-filter"' in html
     assert 'id="end-date-filter"' in html
+    assert 'id="page-size"' in html
+    assert 'id="previous-page"' in html
+    assert 'id="next-page"' in html
     assert 'id="reset-filters"' in html
     assert 'id="run-count" aria-live="polite"' in html
     assert 'data-date="2026-01-01"' in html
@@ -70,12 +73,15 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
     assert "Install package on localhost" in html
     assert "No runs match the selected filters." in html
     assert "matchesJob && matchesStatus && matchesStartDate && matchesEndDate" in html
-    assert "Showing ${visibleRows} of ${totalRows} runs" in html
+    assert "matchingRows.slice(firstIndex, lastIndex)" in html
+    assert "Showing ${matchingRows.length ? firstIndex + 1 : 0}" in html
     assert 'resetFilters.addEventListener("click"' in html
+    assert 'View complete run output (stdout and stderr)' in html
 
     (runs / "run.json").unlink()
     empty_report = generate_report(runs, reports).read_text(encoding="utf-8")
     assert "No Ansible runs have been recorded yet." in empty_report
+    assert not (reports / "run-logs" / "run.txt").exists()
 
 
 def test_retention_removes_only_runs_older_than_cutoff(tmp_path: Path) -> None:
@@ -140,9 +146,30 @@ def test_report_shows_only_last_output_lines(tmp_path: Path) -> None:
     assert "output line 200\n" not in html
     assert "Standard output (last 100 lines)" in html
     assert "200 earlier lines omitted" in html
-    assert "<code>20260101_ping.json</code>" in html
+    assert 'href="run-logs/20260101_ping.txt"' in html
+    full_output = (
+        tmp_path / "reports" / "run-logs" / "20260101_ping.txt"
+    ).read_text(encoding="utf-8")
+    assert "output line 1" in full_output
+    assert "output line 300" in full_output
+    assert "--- Standard error ---\nwarning" in full_output
     # Short output is shown completely and without a note.
     assert "<summary>Standard error</summary>" in html
+
+
+def test_report_paginates_large_run_histories(tmp_path: Path) -> None:
+    """Offer paging controls instead of displaying a large run history at once."""
+    runs = tmp_path / "runs"
+    for number in range(75):
+        write_run(runs, f"{number:03}.json", job=f"job-{number}")
+
+    html = generate_report(runs, tmp_path / "reports").read_text(encoding="utf-8")
+
+    assert html.count('class="run run-row"') == 75
+    assert '<option value="50" selected>50</option>' in html
+    assert 'aria-label="Run pages"' in html
+    assert "Page ${currentPage} of ${Math.max(pageCount, 1)}" in html
+    assert "nextPage.addEventListener" in html
 
 
 def test_report_shows_skipped_runs(tmp_path: Path) -> None:
