@@ -17,8 +17,9 @@ For more information [Playbook-Scheduler Wiki](https://github.com/andreasdvorak/
 - Per-host task-result counters and failed task names captured with an Ansible
   callback plugin.
 - Regenerated HTML report with run history, including skipped runs, filters,
-  and pagination for larger histories; long output is shortened in the overview
-  and available in full from a per-run output link and the JSON records.
+  host-specific change filtering, and pagination for larger histories; long
+  output is shortened in the overview and available in full from a per-run
+  output link and the JSON records.
 - Timestamped log of job starts, results, and scheduler events while `serve`
   runs.
 - Retention of old run records by age.

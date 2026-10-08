@@ -60,6 +60,9 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
     assert 'data-job="&lt;script&gt;alert(1)&lt;/script&gt;"' in html
     assert 'id="status-filter"' in html
     assert 'data-status="failed"' in html
+    assert 'id="changed-host-filter"' in html
+    assert '<option value="localhost">localhost</option>' in html
+    assert 'data-changed-hosts="[&#34;localhost&#34;]"' in html
     assert 'id="start-date-filter"' in html
     assert 'id="end-date-filter"' in html
     assert 'id="page-size"' in html
@@ -72,7 +75,7 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
     assert "localhost" in html
     assert "Install package on localhost" in html
     assert "No runs match the selected filters." in html
-    assert "matchesJob && matchesStatus && matchesStartDate && matchesEndDate" in html
+    assert "matchesJob && matchesStatus && matchesChangedHost &&" in html
     assert "matchingRows.slice(firstIndex, lastIndex)" in html
     assert "Showing ${matchingRows.length ? firstIndex + 1 : 0}" in html
     assert 'resetFilters.addEventListener("click"' in html
@@ -82,6 +85,36 @@ def test_report_escapes_output_and_shows_empty_state(tmp_path: Path) -> None:
     empty_report = generate_report(runs, reports).read_text(encoding="utf-8")
     assert "No Ansible runs have been recorded yet." in empty_report
     assert not (reports / "run-logs" / "run.txt").exists()
+
+
+def test_report_filters_runs_by_host_with_changes(tmp_path: Path) -> None:
+    """List changed hosts and include only matching runs in the host filter."""
+    runs = tmp_path / "runs"
+    write_run(
+        runs,
+        "changed.json",
+        metrics={
+            "hosts": [
+                {"name": "app-1", "changed": 1},
+                {"name": "db-1", "changed": 0},
+            ]
+        },
+    )
+    write_run(
+        runs,
+        "unchanged.json",
+        metrics={"hosts": [{"name": "app-1", "changed": 0}]},
+    )
+    write_run(runs, "missing-metrics.json", metrics=None)
+
+    html = generate_report(runs, tmp_path / "reports").read_text(encoding="utf-8")
+
+    assert '<option value="app-1">app-1</option>' in html
+    assert '<option value="db-1">db-1</option>' in html
+    assert 'data-changed-hosts="[&#34;app-1&#34;]"' in html
+    assert 'data-changed-hosts="[&#34;db-1&#34;]"' not in html
+    assert 'data-changed-hosts="[]"' in html
+    assert "changedHosts.includes(changedHostFilter.value)" in html
 
 
 def test_retention_removes_only_runs_older_than_cutoff(tmp_path: Path) -> None:

@@ -101,6 +101,26 @@ def _write_full_output_logs(runs: list[dict[str, Any]], reports_directory: Path)
             log_file.unlink()
 
 
+def _add_host_change_data(runs: list[dict[str, Any]]) -> list[str]:
+    """Add per-run changed-host names and return all hosts in the history."""
+    host_names: set[str] = set()
+    for run in runs:
+        metrics = run.get("metrics")
+        hosts = metrics.get("hosts", []) if isinstance(metrics, dict) else []
+        changed_hosts: list[str] = []
+        if isinstance(hosts, list):
+            for host in hosts:
+                if not isinstance(host, dict) or not isinstance(host.get("name"), str):
+                    continue
+                name = host["name"]
+                host_names.add(name)
+                changed = host.get("changed")
+                if isinstance(changed, int) and changed > 0:
+                    changed_hosts.append(name)
+        run["changed_hosts"] = changed_hosts
+    return sorted(host_names, key=str.casefold)
+
+
 def generate_report(
     runs_directory: Path,
     reports_directory: Path,
@@ -124,6 +144,7 @@ def generate_report(
     template = environment.get_template("report.html.j2")
     report_path = reports_directory / "index.html"
     runs = load_runs(runs_directory)
+    hosts = _add_host_change_data(runs)
     _write_full_output_logs(runs, reports_directory)
     atomic_write_text(
         report_path,
@@ -132,6 +153,7 @@ def generate_report(
             tail=partial(tail_output, max_lines=max_output_lines),
             max_output_lines=max_output_lines,
             default_page_size=DEFAULT_PAGE_SIZE,
+            hosts=hosts,
             generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         ),
     )

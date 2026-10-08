@@ -206,6 +206,15 @@
         </select>
       </div>
       <div class="filter-group">
+        <label for="changed-host-filter">Changed on host</label>
+        <select id="changed-host-filter">
+          <option value="">Any host</option>
+          {% for host in hosts %}
+          <option value="{{ host }}">{{ host }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
         <label for="start-date-filter">From date (UTC)</label>
         <input id="start-date-filter" type="date">
       </div>
@@ -229,7 +238,7 @@
 
     <div class="runs">
       {% for run in runs %}
-      <article class="run run-row" data-job="{{ run.job }}" data-status="{{ run.status }}" data-date="{{ run.started_at[:10] }}" data-duration="{{ run.duration_seconds if run.duration_seconds is not none and run.status != 'skipped' else '' }}">
+      <article class="run run-row" data-job="{{ run.job }}" data-status="{{ run.status }}" data-date="{{ run.started_at[:10] }}" data-duration="{{ run.duration_seconds if run.duration_seconds is not none and run.status != 'skipped' else '' }}" data-changed-hosts="{{ run.changed_hosts|tojson|forceescape }}">
         <div class="run-head">
           <span class="badge {{ run.status }}">{{ run.status }}</span>
           <span class="run-job">{{ run.job }}</span>
@@ -314,6 +323,7 @@
     <script>
       const jobFilter = document.getElementById("job-filter");
       const statusFilter = document.getElementById("status-filter");
+      const changedHostFilter = document.getElementById("changed-host-filter");
       const startDateFilter = document.getElementById("start-date-filter");
       const endDateFilter = document.getElementById("end-date-filter");
       const pageSizeFilter = document.getElementById("page-size");
@@ -365,12 +375,16 @@
           const matchesJob = row.dataset.job.toLocaleLowerCase().includes(query);
           const matchesStatus =
             !statusFilter.value || row.dataset.status === statusFilter.value;
+          const changedHosts = JSON.parse(row.dataset.changedHosts);
+          const matchesChangedHost =
+            !changedHostFilter.value || changedHosts.includes(changedHostFilter.value);
           const matchesStartDate =
             !startDateFilter.value || row.dataset.date >= startDateFilter.value;
           const matchesEndDate =
             !endDateFilter.value || row.dataset.date <= endDateFilter.value;
           const matches =
-            matchesJob && matchesStatus && matchesStartDate && matchesEndDate;
+            matchesJob && matchesStatus && matchesChangedHost &&
+            matchesStartDate && matchesEndDate;
           if (matches) matchingRows.push(row);
         });
 
@@ -400,6 +414,7 @@
 
       jobFilter.addEventListener("input", () => applyFilters());
       statusFilter.addEventListener("change", () => applyFilters());
+      changedHostFilter.addEventListener("change", () => applyFilters());
       startDateFilter.addEventListener("change", () => applyFilters());
       endDateFilter.addEventListener("change", () => applyFilters());
       pageSizeFilter.addEventListener("change", () => applyFilters());
@@ -408,6 +423,7 @@
       resetFilters.addEventListener("click", () => {
         jobFilter.value = "";
         statusFilter.value = "";
+        changedHostFilter.value = "";
         startDateFilter.value = "";
         endDateFilter.value = "";
         applyFilters();
