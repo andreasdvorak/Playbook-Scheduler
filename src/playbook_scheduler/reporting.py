@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from playbook_scheduler.files import atomic_write_text
 
 DEFAULT_OUTPUT_LINES = 200
+DEFAULT_PAGE_SIZE = 50
 # Ansible prints module results with -v as one JSON line, which can be huge.
 MAX_LINE_CHARS = 1000
 
@@ -64,6 +66,41 @@ def load_runs(runs_directory: Path) -> list[dict[str, Any]]:
     return runs
 
 
+def _write_full_output_logs(runs: list[dict[str, Any]], reports_directory: Path) -> None:
+    """Write complete output files linked from the HTML report."""
+    logs_directory = reports_directory / "run-logs"
+    logs_directory.mkdir(parents=True, exist_ok=True)
+    active_logs: set[str] = set()
+    for run in runs:
+        filename = Path(run["record_file"]).with_suffix(".txt").name
+        active_logs.add(filename)
+        run["full_output_href"] = f"run-logs/{quote(filename, safe='')}"
+
+        metadata = [
+            f"Job: {run.get('job', '')}",
+            f"Status: {run.get('status', '')}",
+            f"Started: {run.get('started_at', '')}",
+        ]
+        if run.get("command"):
+            metadata.append(f"Command: {json.dumps(run['command'], ensure_ascii=False)}")
+        sections = ["\n".join(metadata)]
+        sections.extend(
+            f"--- {label} ---\n{run.get(field) or ''}"
+            for label, field in (
+                ("Standard output", "stdout"),
+                ("Standard error", "stderr"),
+            )
+        )
+        if run.get("error"):
+            sections.append(f"--- Scheduler error ---\n{run['error']}")
+        atomic_write_text(logs_directory / filename, "\n\n".join(sections) + "\n")
+
+    # Keep retention of generated output files in sync with retained run records.
+    for log_file in logs_directory.glob("*.txt"):
+        if log_file.name not in active_logs:
+            log_file.unlink()
+
+
 def generate_report(
     runs_directory: Path,
     reports_directory: Path,
@@ -86,12 +123,15 @@ def generate_report(
     )
     template = environment.get_template("report.html.j2")
     report_path = reports_directory / "index.html"
+    runs = load_runs(runs_directory)
+    _write_full_output_logs(runs, reports_directory)
     atomic_write_text(
         report_path,
         template.render(
-            runs=load_runs(runs_directory),
+            runs=runs,
             tail=partial(tail_output, max_lines=max_output_lines),
             max_output_lines=max_output_lines,
+            default_page_size=DEFAULT_PAGE_SIZE,
             generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         ),
     )

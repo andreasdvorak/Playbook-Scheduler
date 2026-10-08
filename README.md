@@ -5,6 +5,8 @@ file-based history of their results. Each execution is stored as JSON and
 rendered into a single HTML report. No database, web server, or Ansible Python
 SDK is required; playbooks are started with the `ansible-playbook` command.
 
+For more information [Playbook-Scheduler Wiki](https://github.com/andreasdvorak/Playbook-Scheduler/wiki)
+
 ## Features
 
 - YAML configuration with validation of job names, cron expressions, paths,
@@ -14,8 +16,9 @@ SDK is required; playbooks are started with the `ansible-playbook` command.
   command, exit code, standard output, and standard error.
 - Per-host task-result counters and failed task names captured with an Ansible
   callback plugin.
-- Regenerated HTML report with run history, including skipped runs; long
-  output is shortened in the report but kept in full in the JSON records.
+- Regenerated HTML report with run history, including skipped runs, filters,
+  and pagination for larger histories; long output is shortened in the overview
+  and available in full from a per-run output link and the JSON records.
 - Timestamped log of job starts, results, and scheduler events while `serve`
   runs.
 - Retention of old run records by age.

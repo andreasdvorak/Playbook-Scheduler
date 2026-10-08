@@ -98,6 +98,14 @@
       .filter button { cursor: pointer; }
       .filter button:hover { border-color: var(--accent); color: var(--accent); }
       #run-count { color: var(--muted); font-size: .9rem; }
+      .pagination { align-items: center; display: flex; flex-wrap: wrap; gap: .75rem; justify-content: center; margin-top: 1rem; }
+      .pagination button, .pagination select { background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; color: var(--text); font: inherit; padding: .45rem .6rem; }
+      .pagination button { cursor: pointer; }
+      .pagination button:disabled { cursor: default; opacity: .5; }
+      .pagination button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .pagination label { color: var(--muted); font-size: .9rem; }
+      .full-output { font-size: .9rem; margin: .75rem 0 0; }
+      a { color: var(--accent); }
 
       .runs { display: flex; flex-direction: column; gap: .75rem; }
       .run { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); padding: 1rem 1.25rem; }
@@ -205,6 +213,14 @@
         <label for="end-date-filter">To date (UTC)</label>
         <input id="end-date-filter" type="date">
       </div>
+      <div class="filter-group">
+        <label for="page-size">Runs per page</label>
+        <select id="page-size">
+          <option value="25">25</option>
+          <option value="{{ default_page_size }}" selected>{{ default_page_size }}</option>
+          <option value="100">100</option>
+        </select>
+      </div>
       <div class="filter-actions">
         <span id="run-count" aria-live="polite"></span>
         <button id="reset-filters" type="button">Reset filters</button>
@@ -281,28 +297,40 @@
         {% set text, omitted = tail(output) %}
         <details>
           <summary>{{ label }}{% if omitted %} (last {{ max_output_lines }} lines){% endif %}</summary>
-          {% if omitted %}<p class="omitted">{{ omitted }} earlier lines omitted. The full output is in <code>{{ run.record_file }}</code>.</p>{% endif %}
+          {% if omitted %}<p class="omitted">{{ omitted }} earlier lines omitted. <a href="{{ run.full_output_href }}">View the complete run output.</a></p>{% endif %}
           <pre>{{ text }}</pre>
         </details>
         {% endfor %}
+        <p class="full-output"><a href="{{ run.full_output_href }}">View complete run output (stdout and stderr)</a></p>
       </article>
       {% endfor %}
     </div>
     <p id="no-matching-jobs" class="empty" hidden>No runs match the selected filters.</p>
+    <nav class="pagination" aria-label="Run pages">
+      <button id="previous-page" type="button">Previous</button>
+      <span id="page-info" aria-live="polite"></span>
+      <button id="next-page" type="button">Next</button>
+    </nav>
     <script>
       const jobFilter = document.getElementById("job-filter");
       const statusFilter = document.getElementById("status-filter");
       const startDateFilter = document.getElementById("start-date-filter");
       const endDateFilter = document.getElementById("end-date-filter");
+      const pageSizeFilter = document.getElementById("page-size");
       const runRows = document.querySelectorAll(".run-row");
       const noMatchingJobs = document.getElementById("no-matching-jobs");
       const resetFilters = document.getElementById("reset-filters");
       const runCount = document.getElementById("run-count");
+      const previousPage = document.getElementById("previous-page");
+      const nextPage = document.getElementById("next-page");
+      const pageInfo = document.getElementById("page-info");
+      const pageNavigation = document.querySelector(".pagination");
       const statTotal = document.getElementById("stat-total");
       const statRate = document.getElementById("stat-rate");
       const statFailed = document.getElementById("stat-failed");
       const statSkipped = document.getElementById("stat-skipped");
       const statDuration = document.getElementById("stat-duration");
+      let currentPage = 1;
 
       const formatDuration = (seconds) => {
         if (seconds < 60) return `${seconds.toFixed(1)} s`;
@@ -328,9 +356,8 @@
           : "—";
       };
 
-      const applyFilters = () => {
+      const applyFilters = (resetPage = true) => {
         const query = jobFilter.value.trim().toLocaleLowerCase();
-        let visibleRows = 0;
         const totalRows = runRows.length;
         const matchingRows = [];
 
@@ -344,20 +371,40 @@
             !endDateFilter.value || row.dataset.date <= endDateFilter.value;
           const matches =
             matchesJob && matchesStatus && matchesStartDate && matchesEndDate;
-          row.hidden = !matches;
-          visibleRows += Number(matches);
           if (matches) matchingRows.push(row);
         });
 
-        noMatchingJobs.hidden = visibleRows > 0;
-        runCount.textContent = `Showing ${visibleRows} of ${totalRows} runs`;
+        const pageSize = Number(pageSizeFilter.value);
+        const pageCount = Math.ceil(matchingRows.length / pageSize);
+        if (resetPage) currentPage = 1;
+        currentPage = Math.max(1, Math.min(currentPage, Math.max(pageCount, 1)));
+        const firstIndex = (currentPage - 1) * pageSize;
+        const lastIndex = Math.min(firstIndex + pageSize, matchingRows.length);
+        runRows.forEach((row) => { row.hidden = true; });
+        matchingRows.slice(firstIndex, lastIndex).forEach((row) => { row.hidden = false; });
+
+        noMatchingJobs.hidden = matchingRows.length > 0;
+        runCount.textContent =
+          `Showing ${matchingRows.length ? firstIndex + 1 : 0}-${lastIndex} of ${matchingRows.length} matching runs (${totalRows} total)`;
+        pageInfo.textContent = `Page ${currentPage} of ${Math.max(pageCount, 1)}`;
+        previousPage.disabled = currentPage <= 1;
+        nextPage.disabled = currentPage >= pageCount;
+        pageNavigation.hidden = pageCount <= 1;
         updateStats(matchingRows);
       };
 
-      jobFilter.addEventListener("input", applyFilters);
-      statusFilter.addEventListener("change", applyFilters);
-      startDateFilter.addEventListener("change", applyFilters);
-      endDateFilter.addEventListener("change", applyFilters);
+      const goToPage = (page) => {
+        currentPage = page;
+        applyFilters(false);
+      };
+
+      jobFilter.addEventListener("input", () => applyFilters());
+      statusFilter.addEventListener("change", () => applyFilters());
+      startDateFilter.addEventListener("change", () => applyFilters());
+      endDateFilter.addEventListener("change", () => applyFilters());
+      pageSizeFilter.addEventListener("change", () => applyFilters());
+      previousPage.addEventListener("click", () => goToPage(currentPage - 1));
+      nextPage.addEventListener("click", () => goToPage(currentPage + 1));
       resetFilters.addEventListener("click", () => {
         jobFilter.value = "";
         statusFilter.value = "";
