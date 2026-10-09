@@ -321,6 +321,7 @@ Wants=network-online.target
 Type=simple
 User=playbook-scheduler
 Group=playbook-scheduler
+UMask=0027
 WorkingDirectory=/opt/playbook-scheduler
 ExecStart=/opt/playbook-scheduler/.venv/bin/playbook-scheduler --config /opt/playbook-scheduler/config/config.yaml serve
 Restart=on-failure
@@ -340,7 +341,9 @@ systemd kills all remaining processes, including Ansible's workers.
 
 Make sure the service account can read the Playbook Scheduler configuration, playbooks,
 inventory, and credentials, and can write to the configured run and report
-directories. Set `ansible_venv` for each job to the Ansible project's virtual
+directories. `UMask=0027` makes generated files group-readable (mode `0640`),
+so a web server in the `playbook-scheduler` group can serve reports and read
+run data. Set `ansible_venv` for each job to the Ansible project's virtual
 environment; it does not need to be activated by systemd. Then load and enable
 the service:
 

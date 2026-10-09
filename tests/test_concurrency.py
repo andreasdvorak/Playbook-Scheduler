@@ -4,13 +4,14 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from playbook_scheduler import cli, scheduler, service
+from playbook_scheduler import cli, files, scheduler, service
 from playbook_scheduler.config import AppConfig, ConfigError, Job, load_config
 from playbook_scheduler.files import (
     REPORT_LOCK_NAME,
@@ -85,6 +86,19 @@ def test_atomic_write_replaces_file_without_leftovers(tmp_path: Path) -> None:
 
     assert target.read_text(encoding="utf-8") == "new"
     assert [path.name for path in target.parent.iterdir()] == ["index.html"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses POSIX file permissions")
+def test_atomic_write_applies_umask_to_file_permissions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Make atomic output readable by the group allowed by the umask."""
+    monkeypatch.setattr(files, "_UMASK", 0o027)
+    target = tmp_path / "reports" / "index.html"
+
+    files.atomic_write_text(target, "report")
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
 
 def test_execute_job_skips_job_that_is_already_running(
