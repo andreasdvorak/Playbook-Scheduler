@@ -10,6 +10,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO
 
+_UMASK = os.umask(0)
+os.umask(_UMASK)
+
 if os.name == "nt":
     import msvcrt  # pylint: disable=import-error
 else:
@@ -117,6 +120,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     )
     try:
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as output:
+            if os.name != "nt":
+                os.fchmod(output.fileno(), 0o666 & ~_UMASK)
             output.write(text)
         os.replace(temporary_name, path)
     finally:
