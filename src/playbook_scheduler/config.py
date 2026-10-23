@@ -24,7 +24,8 @@ class Job:  # pylint: disable=too-many-instance-attributes
         name: Unique job identifier used by the CLI, scheduler, and reports.
         cron: Five-field cron expression interpreted in the global time zone.
         playbook: Absolute path to the Ansible playbook.
-        inventory: Absolute path to the Ansible inventory file or directory.
+        inventory: Optional absolute path to the Ansible inventory file or
+            directory. When omitted, Ansible uses its configured inventory.
         working_directory: Working directory of the ``ansible-playbook`` process.
         timeout_seconds: Maximum runtime before the process is terminated.
         extra_args: Additional command-line arguments for ``ansible-playbook``.
@@ -34,7 +35,7 @@ class Job:  # pylint: disable=too-many-instance-attributes
     name: str
     cron: str
     playbook: Path
-    inventory: Path
+    inventory: Path | None
     working_directory: Path
     timeout_seconds: int
     extra_args: tuple[str, ...]
@@ -279,18 +280,20 @@ def _ansible_venv(
 
 def _job_files(
     job_data: dict[str, object], context: str, working_directory: Path
-) -> tuple[Path, Path]:
-    """Resolve and validate the playbook and inventory paths."""
+) -> tuple[Path, Path | None]:
+    """Resolve and validate the playbook and optional inventory paths."""
     playbook = _resolve_path(
         _required_string(job_data, "playbook", context), working_directory
     )
-    inventory = _resolve_path(
-        _required_string(job_data, "inventory", context), working_directory
-    )
     if not playbook.is_file():
         raise ConfigError(f"{context}.playbook is not a file: {playbook}")
-    if not inventory.exists():
-        raise ConfigError(f"{context}.inventory does not exist: {inventory}")
+    inventory = None
+    if "inventory" in job_data:
+        inventory = _resolve_path(
+            _required_string(job_data, "inventory", context), working_directory
+        )
+        if not inventory.exists():
+            raise ConfigError(f"{context}.inventory does not exist: {inventory}")
     return playbook, inventory
 
 
@@ -416,7 +419,8 @@ def load_config(config_path: Path | str) -> AppConfig:
 
     Relative output directories and working directories are resolved from the
     directory of the configuration file; relative playbook, inventory, and
-    virtual environment paths from the job's working directory.
+    virtual environment paths from the job's working directory. When a job
+    omits ``inventory``, Ansible's inventory setting is used.
 
     Args:
         config_path: Path of the configuration file.

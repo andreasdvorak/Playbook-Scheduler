@@ -96,13 +96,11 @@ def _command(job: Job) -> list[str]:
     """
     executable = job.ansible_playbook_executable
     command_name = str(executable) if executable is not None else "ansible-playbook"
-    return [
-        command_name,
-        "-i",
-        str(job.inventory),
-        str(job.playbook),
-        *job.extra_args,
-    ]
+    command = [command_name]
+    if job.inventory is not None:
+        command.extend(["-i", str(job.inventory)])
+    command.extend([str(job.playbook), *job.extra_args])
+    return command
 
 
 def _new_result(job: Job, started: datetime) -> dict[str, Any]:

@@ -129,11 +129,16 @@ jobs:
   - name: local_ping
     cron: "0 2 * * *"
     playbook: examples/playbooks/ping.yml
-    inventory: examples/inventory/hosts.ini
     working_directory: ..
     timeout_seconds: 3600
     extra_args: []
 ```
+
+If `inventory` is omitted, Playbook Scheduler does not pass `-i` to
+`ansible-playbook`, so Ansible uses the inventory configured in `ansible.cfg`
+(or its normal Ansible default). Put `ansible.cfg` in the job's
+`working_directory`, or set `ANSIBLE_CONFIG` in the scheduler's environment.
+An explicitly configured `inventory` still takes precedence.
 
 ### Configuration reference
 
@@ -149,7 +154,7 @@ jobs:
 | `jobs[].name` | Job | Required | Unique job identifier used by the CLI and reports. Use letters, numbers, `.`, `_`, or `-`; the first character must be a letter or number. |
 | `jobs[].cron` | Job | Required | Five-field cron schedule, such as `"0 2 * * *"`. Interpreted in the global `timezone`. |
 | `jobs[].playbook` | Job | Required | Path to the Ansible playbook. Relative paths are resolved from `working_directory`. |
-| `jobs[].inventory` | Job | Required | Path to the Ansible inventory file or directory. Relative paths are resolved from `working_directory`. |
+| `jobs[].inventory` | Job | Optional; defaults to Ansible's configured inventory | Path to the Ansible inventory file or directory. Relative paths are resolved from `working_directory`. When omitted, Ansible uses `ansible.cfg` or its normal default. |
 | `jobs[].working_directory` | Job | Optional; defaults to the configuration file's directory | Working directory for the Ansible process. Relative paths are resolved from the configuration file's directory. |
 | `jobs[].timeout_seconds` | Job | Optional; defaults to `3600` | Positive maximum runtime for the playbook in seconds. When it is exceeded, `ansible-playbook` is asked to stop (SIGTERM) so it can end its running tasks, and is killed only if it has not exited after 30 more seconds. |
 | `jobs[].extra_args` | Job | Optional; defaults to `[]` | List of additional command-line arguments passed to `ansible-playbook`. Use one string per argument. |
@@ -194,13 +199,13 @@ Validate the configuration and referenced paths before starting:
 playbook-scheduler validate
 ```
 
-Besides the configuration and the playbook and inventory paths, `validate`
-checks that every job finds an executable `ansible-playbook` and prints its
-path per job. Jobs with `ansible_venv` use the executable in that environment;
-all other jobs use the first `ansible-playbook` on `PATH`. The check uses the
-`PATH` of the shell that runs `validate`, so run it as the service account and
-with the same environment as `serve`. If an executable is missing, `validate`
-exits with code `2`.
+Besides the configuration and any explicitly supplied playbook and inventory
+paths, `validate` checks that every job finds an executable `ansible-playbook`
+and prints its path per job. Jobs with `ansible_venv` use the executable in
+that environment; all other jobs use the first `ansible-playbook` on `PATH`.
+The check uses the `PATH` of the shell that runs `validate`, so run it as the
+service account and with the same environment as `serve`. If an executable is
+missing, `validate` exits with code `2`.
 
 The supplied configuration points to files under `examples/` and can be
 validated as-is. Replace those paths with your own when adapting the sample.

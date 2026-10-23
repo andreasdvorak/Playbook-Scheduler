@@ -206,3 +206,19 @@ def test_run_job_uses_configured_virtualenv(tmp_path: Path) -> None:
     assert popen.call_args.args[0][0] == str(executable)
     assert popen.call_args.kwargs["env"]["VIRTUAL_ENV"] == str(virtualenv)
     assert popen.call_args.kwargs["env"]["PATH"].split(":")[0] == str(virtualenv / "bin")
+
+
+def test_run_job_uses_ansible_config_inventory_when_not_overridden(
+    tmp_path: Path,
+) -> None:
+    """Omit -i so Ansible can use its inventory setting from ansible.cfg."""
+    job = replace(make_job(tmp_path), inventory=None)
+    popen, _ = fake_popen(("", ""))
+
+    with patch("playbook_scheduler.runner.subprocess.Popen", popen):
+        result = run_job(job, tmp_path / "runs")
+
+    command = popen.call_args.args[0]
+    assert result["status"] == "success"
+    assert "-i" not in command
+    assert command == ["ansible-playbook", str(tmp_path / "patch.yml"), "--check"]
