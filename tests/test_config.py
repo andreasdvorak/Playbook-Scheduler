@@ -39,6 +39,21 @@ def test_load_config_resolves_paths_relative_to_config(tmp_path: Path) -> None:
     assert config.jobs[0].timeout_seconds == 3600
 
 
+def test_inventory_can_be_omitted(tmp_path: Path) -> None:
+    """Allow Ansible to use the inventory configured outside the job."""
+    config_path = write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "    inventory: inventory/prod.ini\n", ""
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.jobs[0].inventory is None
+
+
 def test_invalid_cron_is_reported(tmp_path: Path) -> None:
     """Reject cron expressions that APScheduler cannot parse."""
     config_path = write_config(tmp_path, "not a cron")
